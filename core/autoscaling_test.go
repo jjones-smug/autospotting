@@ -313,7 +313,7 @@ func TestLoadConfOnDemand(t *testing.T) {
 			numberExpected:  1,
 			loadingExpected: true,
 		},
-		{name: "Number has priority on percentage value",
+		{name: "Number lower than percentage and both valid so take the percentage",
 			asgTags: []*autoscaling.TagDescription{
 				{
 					Key:   aws.String("Name"),
@@ -337,7 +337,34 @@ func TestLoadConfOnDemand(t *testing.T) {
 				},
 			),
 			maxSize:         aws.Int64(10),
-			numberExpected:  2,
+			numberExpected:  3,
+			loadingExpected: true,
+		},
+		{name: "Number higher than percentage and both valid so take the number",
+			asgTags: []*autoscaling.TagDescription{
+				{
+					Key:   aws.String("Name"),
+					Value: aws.String("asg-test"),
+				},
+				{
+					Key:   aws.String(OnDemandPercentageTag),
+					Value: aws.String("10"),
+				},
+				{
+					Key:   aws.String(OnDemandNumberLong),
+					Value: aws.String("3"),
+				},
+			},
+			asgInstances: makeInstancesWithCatalog(
+				map[string]*instance{
+					"id-1": {},
+					"id-2": {},
+					"id-3": {},
+					"id-4": {},
+				},
+			),
+			maxSize:         aws.Int64(10),
+			numberExpected:  3,
 			loadingExpected: true,
 		},
 		{name: "Number is invalid so percentage value is used",
