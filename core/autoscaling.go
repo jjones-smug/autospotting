@@ -645,7 +645,7 @@ func (a *autoScalingGroup) havingReadyToAttachSpotInstance() (*string, bool) {
 		logger.Println("The new spot instance", *spotInstanceID,
 			"is still in the grace period,",
 			"waiting for it to be ready before we can attach it to the group...",
-			"timeLeft=", gracePeriod-instanceUpTime)
+			"waitTime=", gracePeriod-instanceUpTime)
 		return nil, true
 	} else if *instData.State.Name == "pending" {
 		logger.Println("The new spot instance", *spotInstanceID,
