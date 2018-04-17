@@ -804,11 +804,13 @@ func (a *autoScalingGroup) bidForSpotInstance(
 ) error {
 
 	svc := a.region.services.ec2
+	reqExpires := time.Now()
+	reqExpires = reqExpires.Add(time.Minute * time.Duration(DefaultSpotRequestWaitTime))
 
 	resp, err := svc.RequestSpotInstances(&ec2.RequestSpotInstancesInput{
 		SpotPrice:           aws.String(strconv.FormatFloat(price, 'f', -1, 64)),
 		LaunchSpecification: ls,
-		ValidUntil:          time.Now().Unix() + DefaultSpotRequestWaitTime,
+		ValidUntil:          reqExpires,
 	})
 
 	if err != nil {
