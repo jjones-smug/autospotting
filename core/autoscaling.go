@@ -616,6 +616,9 @@ func (a *autoScalingGroup) havingReadyToAttachSpotInstance() (*string, bool) {
 		logger.Println("Grace period for ", a.name, " too long, was ", gracePeriod, " but using ",
 			DefaultMaxGracePeriod)
 		gracePeriod = DefaultMaxGracePeriod
+	} else {
+		logger.Println("Grace period for ", a.name, " OK, is ", gracePeriod, " not more than ",
+			DefaultMaxGracePeriod)
 	}
 
 	debug.Println(instData)
