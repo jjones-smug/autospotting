@@ -67,6 +67,10 @@ const (
 	// Workaround: Maximum value for initial grace period, which can override
 	// the setting pulled from the ASG configs for the group.
 	DefaultMaxGracePeriod = 420
+
+	// Maximum amount of time a spot request is allowed to be "open" before
+	// it's cancelled, in seconds
+	DefaultSpotRequestWaitTime = 600
 )
 
 type autoScalingGroup struct {
@@ -804,6 +808,7 @@ func (a *autoScalingGroup) bidForSpotInstance(
 	resp, err := svc.RequestSpotInstances(&ec2.RequestSpotInstancesInput{
 		SpotPrice:           aws.String(strconv.FormatFloat(price, 'f', -1, 64)),
 		LaunchSpecification: ls,
+		ValidUntil:          time.Now().Unix()+DefaultSpotRequestWaitTime,
 	})
 
 	if err != nil {
