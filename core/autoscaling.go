@@ -808,7 +808,7 @@ func (a *autoScalingGroup) bidForSpotInstance(
 	resp, err := svc.RequestSpotInstances(&ec2.RequestSpotInstancesInput{
 		SpotPrice:           aws.String(strconv.FormatFloat(price, 'f', -1, 64)),
 		LaunchSpecification: ls,
-		ValidUntil:          time.Now().Unix()+DefaultSpotRequestWaitTime,
+		ValidUntil:          time.Now().Unix() + DefaultSpotRequestWaitTime,
 	})
 
 	if err != nil {
