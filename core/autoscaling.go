@@ -68,8 +68,8 @@ const (
 	// the setting pulled from the ASG configs for the group.
 	DefaultMaxGracePeriod = 420
 
-	// Maximum amount of time a spot request is allowed to be "open" before
-	// it's cancelled, in seconds
+	// Maximum amount of time a spot request can be "open" before it's cancelled.
+	// The time is an offset, in seconds, from the time the request is made
 	DefaultSpotRequestWaitTime = 600
 )
 
