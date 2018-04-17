@@ -608,16 +608,16 @@ func (a *autoScalingGroup) havingReadyToAttachSpotInstance() (*string, bool) {
 		return nil, false
 	}
 
-	logger.Println("Considering ", *spotInstanceID, "for attaching to", a.name)
+	logger.Println("Considering ", *spotInstanceID, "for attaching to", a.name, "MOD")
 
 	instData := a.region.instances.get(*spotInstanceID)
 	gracePeriod := *a.HealthCheckGracePeriod
 	if gracePeriod > DefaultMaxGracePeriod {
-		logger.Println("Grace period for ", a.name, " too long, was ", gracePeriod, " but using ",
+		logger.Println("Grace period for", a.name, "too long, was", gracePeriod, "but using",
 			DefaultMaxGracePeriod)
 		gracePeriod = DefaultMaxGracePeriod
 	} else {
-		logger.Println("Grace period for ", a.name, " OK, is ", gracePeriod, " not more than ",
+		logger.Println("Grace period for", a.name, "OK, is", gracePeriod, "not more than",
 			DefaultMaxGracePeriod)
 	}
 
@@ -644,7 +644,8 @@ func (a *autoScalingGroup) havingReadyToAttachSpotInstance() (*string, bool) {
 		instanceUpTime < gracePeriod {
 		logger.Println("The new spot instance", *spotInstanceID,
 			"is still in the grace period,",
-			"waiting for it to be ready before we can attach it to the group...")
+			"waiting for it to be ready before we can attach it to the group...",
+                        "tiemLeft=", gracePeriod - instanceUpTime)
 		return nil, true
 	} else if *instData.State.Name == "pending" {
 		logger.Println("The new spot instance", *spotInstanceID,
