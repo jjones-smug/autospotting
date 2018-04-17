@@ -64,9 +64,9 @@ const (
 	// the spot bid on a per-group level
 	DefaultBiddingPolicy = "normal"
 
-        // Workaround: Maximum value for initial grace period, which can override
-        // the setting pulled from the ASG configs for the group.
-        DefaultMaxGracePeriod = 420
+	// Workaround: Maximum value for initial grace period, which can override
+	// the setting pulled from the ASG configs for the group.
+	DefaultMaxGracePeriod = 420
 )
 
 type autoScalingGroup struct {
@@ -612,11 +612,11 @@ func (a *autoScalingGroup) havingReadyToAttachSpotInstance() (*string, bool) {
 
 	instData := a.region.instances.get(*spotInstanceID)
 	gracePeriod := *a.HealthCheckGracePeriod
-        if gracePeriod > DefaultMaxGracePeriod {
-            logger.Println("Grace period for ", a.name, " too long, was ", gracePeriod, " but using ",
-                    DefaultMaxGracePeriod)
-            gracePeriod = DefaultMaxGracePeriod
-        }
+	if gracePeriod > DefaultMaxGracePeriod {
+		logger.Println("Grace period for ", a.name, " too long, was ", gracePeriod, " but using ",
+			DefaultMaxGracePeriod)
+		gracePeriod = DefaultMaxGracePeriod
+	}
 
 	debug.Println(instData)
 
