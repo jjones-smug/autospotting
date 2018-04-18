@@ -69,8 +69,8 @@ const (
 	DefaultMaxGracePeriod = 420
 
 	// Maximum amount of time a spot request can be "open" before it's cancelled.
-	// Specify an offset, in minutes, to be added to the time the request is made.
-	DefaultSpotRequestWaitTime = 10
+	// Specify an offset, in seconds, to be added to the time the request is made.
+	DefaultSpotRequestWaitTime = 40
 )
 
 type autoScalingGroup struct {
@@ -805,7 +805,7 @@ func (a *autoScalingGroup) bidForSpotInstance(
 
 	svc := a.region.services.ec2
 	reqExpires := time.Now()
-	reqExpires = reqExpires.Add(time.Minute * time.Duration(DefaultSpotRequestWaitTime))
+	reqExpires = reqExpires.Add(time.Second * time.Duration(DefaultSpotRequestWaitTime))
 
 	resp, err := svc.RequestSpotInstances(&ec2.RequestSpotInstancesInput{
 		SpotPrice:           aws.String(strconv.FormatFloat(price, 'f', -1, 64)),
