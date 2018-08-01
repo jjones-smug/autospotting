@@ -502,7 +502,7 @@ func (i *instance) isReadyToAttach(asg *autoScalingGroup) bool {
 
 	gracePeriod := *asg.HealthCheckGracePeriod
 	if gracePeriod > DefaultMaxGracePeriod {
-		logger.Println("Grace period for ", a.name, " too long, was ", gracePeriod, " but using ",
+		logger.Println("Grace period for ", asg.name, " too long, was ", gracePeriod, " but using ",
 			DefaultMaxGracePeriod)
 		gracePeriod = DefaultMaxGracePeriod
 	}
