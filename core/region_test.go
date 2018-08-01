@@ -1,4 +1,4 @@
-jjopackage autospotting
+package autospotting
 
 import (
 	"math"
