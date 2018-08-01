@@ -1900,7 +1900,7 @@ func Test_instance_isReadyToAttach(t *testing.T) {
 			asg: &autoScalingGroup{
 				name: "my-asg",
 				Group: &autoscaling.Group{
-					HealthCheckGracePeriod: aws.Int64(3600),
+					HealthCheckGracePeriod: aws.Int64(DefaultMaxGracePeriod/2),
 				},
 			},
 			want: false,
