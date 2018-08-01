@@ -1,4 +1,4 @@
-DEPS := "wget git go docker golint"
+DEPS := "wget git go docker golint zip"
 
 BINARY := autospotting
 BINARY_PKG := ./core
@@ -8,6 +8,7 @@ BUCKET_NAME ?= cloudprowess
 FLAVOR ?= custom
 LOCAL_PATH := build/s3/$(FLAVOR)
 LICENSE_FILES := LICENSE
+TERRAFORM := docker container run --rm -e AWS_DEFAULT_REGION=us-east-1 -v $(shell pwd):$(shell pwd) -w $(shell pwd) hashicorp/terraform
 
 SHA := $(shell git rev-parse HEAD | cut -c 1-7)
 BUILD := $(or $(TRAVIS_BUILD_NUMBER), $(TRAVIS_BUILD_NUMBER), $(SHA))
@@ -16,7 +17,7 @@ ifneq ($(FLAVOR), custom)
     LICENSE_FILES += BINARY_LICENSE
 endif
 
-LDFLAGS="-X main.Version=$(FLAVOR)-$(BUILD)"
+LDFLAGS="-X main.Version=$(FLAVOR)-$(BUILD) -s -w"
 
 all: fmt-check vet-check build test                          ## Build the code
 .PHONY: all
@@ -24,6 +25,7 @@ all: fmt-check vet-check build test                          ## Build the code
 clean:                                                       ## Remove installed packages/temporary files
 	go clean ./...
 	rm -rf $(BINDATA_DIR) $(LOCAL_PATH)
+	rm -rf .terraform
 .PHONY: clean
 
 check_deps:                                                  ## Verify the system has all dependencies installed
@@ -34,10 +36,15 @@ check_deps:                                                  ## Verify the syste
 .PHONY: check_deps
 
 build_deps:
-	@go get github.com/mattn/goveralls
-	@go get github.com/golang/lint/golint
-	@go get golang.org/x/tools/cmd/cover
+	@go get -u github.com/mattn/goveralls
+	@go get -u github.com/golang/lint/golint
+	@go get -u golang.org/x/tools/cmd/cover
 .PHONY: build_deps
+
+update_deps:												 ## Update all dependencies
+	@dep ensure -update
+	@dep prune
+.PHONY: update_deps
 
 build: build_deps                                            ## Build autospotting binary
 	GOOS=linux go build -ldflags=$(LDFLAGS) -o $(BINARY)
@@ -47,9 +54,9 @@ archive: build                                               ## Create archive t
 	@rm -rf $(LOCAL_PATH)
 	@mkdir -p $(LOCAL_PATH)
 	@zip $(LOCAL_PATH)/lambda.zip $(BINARY) $(LICENSE_FILES)
-	@cp -f cloudformation/stacks/AutoSpotting/template.json $(LOCAL_PATH)/template.json
-	@cp -f cloudformation/stacks/AutoSpotting/template.json $(LOCAL_PATH)/template_build_$(BUILD).json
-	@sed -i "s#lambda\.zip#lambda_build_$(BUILD).zip#" $(LOCAL_PATH)/template_build_$(BUILD).json
+	@cp -f cloudformation/stacks/AutoSpotting/template.yaml $(LOCAL_PATH)/template.yaml
+	@cp -f cloudformation/stacks/AutoSpotting/template.yaml $(LOCAL_PATH)/template_build_$(BUILD).yaml
+	@sed -i "s#lambda\.zip#lambda_build_$(BUILD).zip#" $(LOCAL_PATH)/template_build_$(BUILD).yaml
 	@cp -f $(LOCAL_PATH)/lambda.zip $(LOCAL_PATH)/lambda_build_$(BUILD).zip
 	@cp -f $(LOCAL_PATH)/lambda.zip $(LOCAL_PATH)/lambda_build_$(SHA).zip
 .PHONY: archive
@@ -59,7 +66,7 @@ upload: archive                                              ## Upload binary
 .PHONY: upload
 
 vet-check:                                                   ## Verify vet compliance
-ifeq ($(shell go tool vet -all -shadow=true $(GOFILES) 2>&1 | wc -l), 0)
+ifeq ($(shell go tool vet -all -shadow=true $(GOFILES) 2>&1 | wc -l | tr -d '[:space:]'), 0)
 	@printf "ok\tall files passed go vet\n"
 else
 	@printf "error\tsome files did not pass go vet\n"
@@ -68,12 +75,12 @@ endif
 .PHONY: vet-check
 
 fmt-check:                                                   ## Verify fmt compliance
-ifneq ($(shell gofmt -l -s $(GOFILES) | wc -l), 0)
+ifeq ($(shell gofmt -l -s $(GOFILES) | wc -l | tr -d '[:space:]'), 0)
+	@printf "ok\tall files passed go fmt\n"
+else
 	@printf "error\tsome files did not pass go fmt, fix the following formatting diff:\n"
 	@gofmt -l -s -d $(GOFILES)
 	@exit 1
-else
-	@printf "ok\tall files passed go fmt\n"
 endif
 .PHONY: fmt-check
 
@@ -102,6 +109,12 @@ travisci-checks: fmt-check vet-check lint                    ## Pass fmt / vet &
 
 travisci: archive travisci-checks travisci-cover             ## Executed by TravisCI
 .PHONY: travisci
+
+terraform-test: archive                                      ## Test the Terraform code
+	$(TERRAFORM) init terraform
+	$(TERRAFORM) validate -var lambda_zipname=$(LOCAL_PATH)/lambda.zip terraform/
+	$(TERRAFORM) validate -var lambda_s3_bucket=bucket -var lambda_s3_key=key terraform/
+.PHONY: terraform-test
 
 help:                                                        ## Show this help
 	@printf "Rules:\n"
