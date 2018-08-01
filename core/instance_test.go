@@ -1859,7 +1859,7 @@ func Test_instance_createRunInstancesInput(t *testing.T) {
 func Test_instance_isReadyToAttach(t *testing.T) {
 	//now := time.Now()
 	tenMinutesAgo := time.Now().Add(-10 * time.Minute)
-	halfGracePeriodAgo := time.Now().Add(DefaultMaxGracePerid / -2)
+	halfGracePeriodAgo := time.Now().Add(DefaultMaxGracePeriod / -2)
 
 	tests := []struct {
 		name     string
