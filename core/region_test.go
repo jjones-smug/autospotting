@@ -1,4 +1,4 @@
-package autospotting
+jjopackage autospotting
 
 import (
 	"math"
@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/jjones/ec2-instances-info"
+	"github.com/jjones-smug/ec2-instances-info"
 )
 
 func Test_region_enabled(t *testing.T) {

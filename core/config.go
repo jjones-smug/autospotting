@@ -4,7 +4,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/jjones/ec2-instances-info"
+	"github.com/jjones-smug/ec2-instances-info"
 )
 
 // Config contains a number of flags and static data storing the EC2 instance
