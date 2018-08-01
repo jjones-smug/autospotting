@@ -492,6 +492,11 @@ func (i *instance) isReadyToAttach(asg *autoScalingGroup) bool {
 	logger.Println("Considering ", *i.InstanceId, "for attaching to", asg.name)
 
 	gracePeriod := *asg.HealthCheckGracePeriod
+	if gracePeriod > DefaultMaxGracePeriod {
+		logger.Println("Grace period for ", a.name, " too long, was ", gracePeriod, " but using ",
+			DefaultMaxGracePeriod)
+		gracePeriod = DefaultMaxGracePeriod
+	}
 
 	instanceUpTime := time.Now().Unix() - i.LaunchTime.Unix()
 
