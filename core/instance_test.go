@@ -1859,6 +1859,7 @@ func Test_instance_createRunInstancesInput(t *testing.T) {
 func Test_instance_isReadyToAttach(t *testing.T) {
 	//now := time.Now()
 	tenMinutesAgo := time.Now().Add(-10 * time.Minute)
+	halfGracePeriodAgo := time.Now().Add(DefaultMaxGracePerid / -2)
 
 	tests := []struct {
 		name     string
@@ -1891,7 +1892,7 @@ func Test_instance_isReadyToAttach(t *testing.T) {
 			instance: instance{
 				Instance: &ec2.Instance{
 					InstanceId: aws.String("i-123"),
-					LaunchTime: &tenMinutesAgo,
+					LaunchTime: &halfGracePeriodAgo,
 					State: &ec2.InstanceState{
 						Name: aws.String(ec2.InstanceStateNameRunning),
 					},
@@ -1900,7 +1901,7 @@ func Test_instance_isReadyToAttach(t *testing.T) {
 			asg: &autoScalingGroup{
 				name: "my-asg",
 				Group: &autoscaling.Group{
-					HealthCheckGracePeriod: aws.Int64(DefaultMaxGracePeriod / 2),
+					HealthCheckGracePeriod: aws.Int64(DefaultMaxGracePeriod),
 				},
 			},
 			want: false,
