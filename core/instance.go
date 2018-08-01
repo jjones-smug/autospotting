@@ -384,12 +384,12 @@ func (i *instance) convertSecurityGroups() []*string {
 func (i *instance) createRunInstancesInput(instanceType string, price float64) *ec2.RunInstancesInput {
 	var retval ec2.RunInstancesInput
 
-	# Not using "ValidUntil" parameters on the RunInstances API call yet, but capturing the 
-	# code to generate the timestamp so it can be added later.
-	#
-	# To test it, just add:    ValidUntil: &reqExpires,
-	# in the structure assembled below.
-	#
+	// Not using "ValidUntil" parameters on the RunInstances API call yet, but capturing the 
+	// code to generate the timestamp so it can be added later.
+	//
+	// To test it, just add:    ValidUntil: &reqExpires,
+	// in the structure assembled below.
+	//
 	reqExpires := time.Now()
 	reqExpires = reqExpires.Add(time.Second * time.Duration(DefaultSpotRequestWaitTime))
 
