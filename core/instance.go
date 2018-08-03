@@ -502,23 +502,29 @@ func (i *instance) isReadyToAttach(asg *autoScalingGroup) bool {
 
 	gracePeriod := *asg.HealthCheckGracePeriod
 	if gracePeriod > DefaultMaxGracePeriod {
-		logger.Println("Grace period for ", asg.name, " too long, was ", gracePeriod, " but using ",
+		logger.Println("Grace period for", asg.name, "too long, was", gracePeriod, "but using",
 			DefaultMaxGracePeriod)
 		gracePeriod = DefaultMaxGracePeriod
 	}
 
 	instanceUpTime := time.Now().Unix() - i.LaunchTime.Unix()
 
-	logger.Println("Instance uptime:", time.Duration(instanceUpTime)*time.Second)
+	logger.Println("Instance uptime:", time.Duration(instanceUpTime)*time.Second,
+		"Grace perod:", time.Duration(gracePeriod)*time.Second)
 
 	// Check if the spot instance is out of the grace period, so in that case we
 	// can replace an on-demand instance with it
 	if *i.State.Name == ec2.InstanceStateNameRunning &&
 		instanceUpTime > gracePeriod {
 		logger.Println("The spot instance", *i.InstanceId,
-			"is still in the grace period,",
-			"waiting for it to be ready before we can attach it to the group...")
+			" has passed grace period and is ready to attach to the group.")
 		return true
+	} else if *i.State.Name == ec2.InstanceStateNameRunning &&
+		instanceUpTime < gracePeriod {
+		logger.Println("The spot instance", *i.InstanceId,
+			"is still pending,",
+			"waiting for it to be running before we can attach it to the group...")
+		return false
 	} else if *i.State.Name == ec2.InstanceStateNamePending {
 		logger.Println("The spot instance", *i.InstanceId,
 			"is still pending,",
