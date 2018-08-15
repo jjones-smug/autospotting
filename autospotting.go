@@ -8,8 +8,8 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/blueharvest/autospotting/core"
-	"github.com/blueharvest/ec2-instances-info"
+	"github.com/jjones-smug/autospotting/core"
+	"github.com/jjones-smug/ec2-instances-info"
 	"github.com/namsral/flag"
 )
 
