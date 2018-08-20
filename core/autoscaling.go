@@ -64,12 +64,13 @@ const (
 	// the spot bid on a per-group level
 	DefaultBiddingPolicy = "normal"
 
-	// Workaround: Maximum value for initial grace period, which can override
-	// the setting pulled from the ASG configs for the group.
+	// DefaultMaxGracePeriod Workaround: Maximum value for initial grace period,
+	// which can override the setting pulled from the ASG configs for the group.
 	DefaultMaxGracePeriod = 390
 
-	// Maximum amount of time a spot request can be "open" before it's cancelled.
-	// Specify an offset, in seconds, to be added to the time the request is made.
+	// DefaultSpotRequestWaitTime maximum amount of time a spot request can be "open"
+	// before it's cancelled. Specify an offset, in seconds, to be added to the time
+	// the request is made.
 	DefaultSpotRequestWaitTime = 40
 )
 
