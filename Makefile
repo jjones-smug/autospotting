@@ -33,7 +33,7 @@ check_deps:                                                  ## Verify the syste
 .PHONY: check_deps
 
 build_deps:
-	#@command -v goveralls || go get github.com/mattn/goveralls
+	@command -v goveralls || go get github.com/mattn/goveralls
 	@command -v golint || go get golang.org/x/lint/golint
 	@go tool cover -V || go get golang.org/x/tools/cmd/cover
 .PHONY: build_deps
@@ -90,7 +90,8 @@ endif
 .PHONY: fmt-check
 
 test:                                                        ## Test go code and coverage
-	@go test -covermode=count -coverprofile=$(COVER_PROFILE) ./...
+	#@go test -covermode=count -coverprofile=$(COVER_PROFILE) ./...
+	@go test -covermode=count ./...
 .PHONY: test
 
 lint: build_deps
@@ -106,8 +107,7 @@ html-cover: test                                             ## Display coverage
 
 travisci-cover: html-cover                                   ## Test & generate coverage in the TravisCI format, fails unless executed from TravisCI
 ifdef COVERALLS_TOKEN
-	#goveralls -coverprofile=$(COVER_PROFILE) -service=travis-ci -repotoken=$(COVERALLS_TOKEN)
-	@echo 'Disable "goveralls" for now, it is not working'
+	@goveralls -coverprofile=$(COVER_PROFILE) -service=travis-ci -repotoken=$(COVERALLS_TOKEN)
 endif
 .PHONY: travisci-cover
 
