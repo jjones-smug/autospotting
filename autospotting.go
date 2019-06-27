@@ -7,7 +7,8 @@ import (
 	"log"
 	"os"
 
-	autospotting "github.com/AutoSpotting/AutoSpotting/core"
+	// autospotting "github.com/AutoSpotting/AutoSpotting/core"
+	autospotting "github.com/jjones-smug/autospotting/core"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/endpoints"

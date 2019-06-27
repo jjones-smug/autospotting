@@ -1,4 +1,4 @@
-module github.com/AutoSpotting/AutoSpotting
+module github.com/jjones-smug/autospotting
 
 go 1.12
 
