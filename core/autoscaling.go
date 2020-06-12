@@ -1,7 +1,11 @@
+// Copyright (c) 2016-2019 Cristian Măgherușan-Stanciu
+// Licensed under the Open Software License version 3.0
+
 package autospotting
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -21,16 +25,17 @@ type autoScalingGroup struct {
 	config              AutoScalingConfig
 }
 
-func (a *autoScalingGroup) loadLaunchConfiguration() error {
+func (a *autoScalingGroup) loadLaunchConfiguration() (*launchConfiguration, error) {
 	//already done
 	if a.launchConfiguration != nil {
-		return nil
+		return a.launchConfiguration, nil
 	}
 
 	lcName := a.LaunchConfigurationName
 
 	if lcName == nil {
-		return errors.New("missing launch configuration")
+		// ASG does not have launch configuration
+		return nil, nil
 	}
 
 	svc := a.region.services.autoScaling
@@ -42,17 +47,17 @@ func (a *autoScalingGroup) loadLaunchConfiguration() error {
 
 	if err != nil {
 		logger.Println(err.Error())
-		return err
+		return nil, err
 	}
 
 	a.launchConfiguration = &launchConfiguration{
 		LaunchConfiguration: resp.LaunchConfigurations[0],
 	}
-	return nil
+	return a.launchConfiguration, nil
 }
 
 func (a *autoScalingGroup) needReplaceOnDemandInstances() bool {
-	onDemandRunning, totalRunning := a.alreadyRunningInstanceCount(false, "")
+	onDemandRunning, totalRunning := a.alreadyRunningInstanceCount(false, nil)
 	if onDemandRunning > a.minOnDemand {
 		logger.Println("Currently more than enough OnDemand instances running")
 		return true
@@ -62,7 +67,7 @@ func (a *autoScalingGroup) needReplaceOnDemandInstances() bool {
 		return false
 	}
 	logger.Println("Currently fewer OnDemand instances than required !")
-	if a.allInstanceRunning() && a.instances.count64() >= *a.DesiredCapacity {
+	if a.allInstancesRunning() && a.instances.count64() >= *a.DesiredCapacity {
 		logger.Println("All instances are running and desired capacity is satisfied")
 		if randomSpot := a.getAnySpotInstance(); randomSpot != nil {
 			if totalRunning == 1 {
@@ -82,9 +87,35 @@ func (a *autoScalingGroup) needReplaceOnDemandInstances() bool {
 	return false
 }
 
-func (a *autoScalingGroup) allInstanceRunning() bool {
-	_, totalRunning := a.alreadyRunningInstanceCount(false, "")
+func (a *autoScalingGroup) allInstancesRunning() bool {
+	_, totalRunning := a.alreadyRunningInstanceCount(false, nil)
 	return totalRunning == a.instances.count64()
+}
+
+func (a *autoScalingGroup) calculateHourlySavings() float64 {
+	var savings float64
+	for i := range a.instances.instances() {
+		savings += (i.typeInfo.pricing.onDemand + i.typeInfo.pricing.premium) - i.price
+	}
+	return savings
+}
+
+func (a *autoScalingGroup) licensedToRun() (bool, error) {
+	defer savingsMutex.Unlock()
+	savingsMutex.Lock()
+
+	savings := a.calculateHourlySavings()
+	hourlySavings += savings
+
+	monthlySavings := hourlySavings * 24 * 30
+	if (monthlySavings > 1000) &&
+		strings.Contains(a.region.conf.Version, "nightly") &&
+		a.region.conf.LicenseType == "evaluation" {
+		return false, fmt.Errorf(
+			"would reach estimated monthly savings of $%.2f when processing this group, above the $1000 evaluation limit",
+			monthlySavings)
+	}
+	return true, nil
 }
 
 func (a *autoScalingGroup) process() {
@@ -98,8 +129,13 @@ func (a *autoScalingGroup) process() {
 	spotInstance := a.findUnattachedInstanceLaunchedForThisASG()
 	debug.Println("Candidate Spot instance", spotInstance)
 
-	shouldRun := cronRunAction(time.Now(), a.config.CronSchedule, a.config.CronScheduleState)
-	debug.Println(a.region.name, a.name, "Should take replacemnt actions:", shouldRun)
+	shouldRun := cronRunAction(time.Now(), a.config.CronSchedule, a.config.CronTimezone, a.config.CronScheduleState)
+	debug.Println(a.region.name, a.name, "Should take replacement actions:", shouldRun)
+
+	if ok, err := a.licensedToRun(); !ok {
+		logger.Println(a.region.name, a.name, "Skipping group, license limit reached:", err.Error())
+		return
+	}
 
 	if spotInstance == nil {
 		logger.Println("No spot instances were found for ", a.name)
@@ -123,7 +159,10 @@ func (a *autoScalingGroup) process() {
 			return
 		}
 
-		a.loadLaunchConfiguration()
+		if _, err := a.loadLaunchConfiguration(); err != nil {
+			logger.Printf("Could not launch configuration: %s", err)
+		}
+
 		err := onDemandInstance.launchSpotReplacement()
 		if err != nil {
 			logger.Printf("Could not launch cheapest spot instance: %s", err)
@@ -173,7 +212,7 @@ func (a *autoScalingGroup) scanInstances() instances {
 		if i.isSpot() {
 			i.price = i.typeInfo.pricing.spot[*i.Placement.AvailabilityZone]
 		} else {
-			i.price = i.typeInfo.pricing.onDemand
+			i.price = i.typeInfo.pricing.onDemand + i.typeInfo.pricing.premium
 		}
 
 		a.instances.add(i)
@@ -183,16 +222,6 @@ func (a *autoScalingGroup) scanInstances() instances {
 
 func (a *autoScalingGroup) replaceOnDemandInstanceWithSpot(
 	spotInstanceID string) error {
-
-	minSize, maxSize := *a.MinSize, *a.MaxSize
-	desiredCapacity := *a.DesiredCapacity
-
-	// temporarily increase AutoScaling group in case it's of static size
-	if minSize == maxSize {
-		logger.Println(a.name, "Temporarily increasing MaxSize")
-		a.setAutoScalingMaxSize(maxSize + 1)
-		defer a.setAutoScalingMaxSize(maxSize)
-	}
 
 	// get the details of our spot instance so we can see its AZ
 	logger.Println(a.name, "Retrieving instance details for ", spotInstanceID)
@@ -216,16 +245,22 @@ func (a *autoScalingGroup) replaceOnDemandInstanceWithSpot(
 	}
 	logger.Println(a.name, "found on-demand instance", *odInst.InstanceId,
 		"replacing with new spot instance", *spotInst.InstanceId)
-	// revert attach/detach order when running on minimum capacity
-	if desiredCapacity == minSize {
-		attachErr := a.attachSpotInstance(spotInstanceID)
-		if attachErr != nil {
-			logger.Println(a.name, "skipping detaching on-demand due to failure to",
-				"attach the new spot instance", *spotInst.InstanceId)
-			return nil
-		}
-	} else {
-		defer a.attachSpotInstance(spotInstanceID)
+
+	desiredCapacity, maxSize := *a.DesiredCapacity, *a.MaxSize
+
+	// temporarily increase AutoScaling group in case the desired capacity reaches the max size,
+	// otherwise attachSpotInstance might fail
+	if desiredCapacity == maxSize {
+		logger.Println(a.name, "Temporarily increasing MaxSize")
+		a.setAutoScalingMaxSize(maxSize + 1)
+		defer a.setAutoScalingMaxSize(maxSize)
+	}
+
+	attachErr := a.attachSpotInstance(spotInstanceID)
+	if attachErr != nil {
+		logger.Println(a.name, "skipping detaching on-demand due to failure to",
+			"attach the new spot instance ", *spotInst.InstanceId)
+		return nil
 	}
 
 	switch a.config.TerminationMethod {
@@ -259,9 +294,20 @@ func (a *autoScalingGroup) getInstance(
 				continue
 			}
 
-			if considerInstanceProtection && (i.isProtectedFromScaleIn() || i.isProtectedFromTermination()) {
-				debug.Println(a.name, "skipping protected instance", *i.InstanceId)
-				continue
+			if considerInstanceProtection {
+				protected := i.isProtectedFromScaleIn()
+				if !protected {
+					protectedT, err := i.isProtectedFromTermination()
+					if err != nil {
+						debug.Println(a.name, "failed to determine termination protection for", *i.InstanceId)
+					}
+					protected = protectedT
+				}
+
+				if protected {
+					debug.Println(a.name, "skipping protected instance", *i.InstanceId)
+					continue
+				}
 			}
 
 			if (availabilityZone != nil) && (*availabilityZone != *i.Placement.AvailabilityZone) {
@@ -457,7 +503,7 @@ func (a *autoScalingGroup) terminateInstanceInAutoScalingGroup(
 
 // Counts the number of already running instances on-demand or spot, in any or a specific AZ.
 func (a *autoScalingGroup) alreadyRunningInstanceCount(
-	spot bool, availabilityZone string) (int64, int64) {
+	spot bool, availabilityZone *string) (int64, int64) {
 
 	var total, count int64
 	instanceCategory := "spot"
@@ -470,11 +516,11 @@ func (a *autoScalingGroup) alreadyRunningInstanceCount(
 		if *inst.Instance.State.Name == "running" {
 			// Count running Spot instances
 			if spot && inst.isSpot() &&
-				(*inst.Placement.AvailabilityZone == availabilityZone || availabilityZone == "") {
+				(availabilityZone == nil || *inst.Placement.AvailabilityZone == *availabilityZone) {
 				count++
 				// Count running OnDemand instances
 			} else if !spot && !inst.isSpot() &&
-				(*inst.Placement.AvailabilityZone == availabilityZone || availabilityZone == "") {
+				(availabilityZone == nil || *inst.Placement.AvailabilityZone == *availabilityZone) {
 				count++
 			}
 			// Count total running instances

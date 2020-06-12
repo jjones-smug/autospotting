@@ -5,13 +5,13 @@ services:
           context: .
           dockerfile: Dockerfile-build
         environment:
-        - FLAVOR=nightly
+        - FLAVOR=${FLAVOR:-nightly}
         - CGO_ENABLED=0
         - COVERALLS_TOKEN
         - TRAVIS_BUILD_NUMBER
         entrypoint:
           - make
-          - travisci
+          - ci
         volumes:
           - type: bind
             source: ./build

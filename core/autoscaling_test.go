@@ -1,3 +1,6 @@
+// Copyright (c) 2016-2019 Cristian Măgherușan-Stanciu
+// Licensed under the Open Software License version 3.0
+
 package autospotting
 
 import (
@@ -17,7 +20,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 		asgName          string
 		asgInstances     instances
 		spot             bool
-		availabilityZone string
+		availabilityZone *string
 		expectedCount    int64
 		expectedTotal    int64
 	}{
@@ -25,7 +28,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 			asgName:          "test-asg",
 			asgInstances:     makeInstances(),
 			spot:             true,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    0,
 		},
@@ -43,7 +46,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             true,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    0,
 		},
@@ -68,7 +71,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             true,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    2,
 		},
@@ -93,7 +96,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             false,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    2,
 		},
@@ -118,7 +121,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             false,
-			availabilityZone: "eu-west-1c",
+			availabilityZone: aws.String("eu-west-1c"),
 			expectedCount:    0,
 			expectedTotal:    2,
 		},
@@ -143,7 +146,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             false,
-			availabilityZone: "eu-west-1b",
+			availabilityZone: aws.String("eu-west-1b"),
 			expectedCount:    1,
 			expectedTotal:    2,
 		},
@@ -168,7 +171,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             true,
-			availabilityZone: "eu-west-1c",
+			availabilityZone: aws.String("eu-west-1c"),
 			expectedCount:    0,
 			expectedTotal:    2,
 		},
@@ -193,7 +196,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             true,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    2,
 			expectedTotal:    2,
 		},
@@ -218,7 +221,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             true,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    1,
 		},
@@ -243,7 +246,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             false,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    1,
 			expectedTotal:    2,
 		},
@@ -268,7 +271,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             false,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    1,
 		},
@@ -793,7 +796,7 @@ func TestLoadLaunchConfiguration(t *testing.T) {
 						dlcerr: nil},
 				},
 			},
-			expectedErr: errors.New("missing launch configuration"),
+			expectedErr: nil,
 			expectedLC:  nil,
 		},
 		{name: "no err during get launch configuration",
@@ -842,8 +845,7 @@ func TestLoadLaunchConfiguration(t *testing.T) {
 					LaunchConfigurationName: tt.nameLC,
 				},
 			}
-			err := a.loadLaunchConfiguration()
-			lc := a.launchConfiguration
+			lc, err := a.loadLaunchConfiguration()
 
 			if !reflect.DeepEqual(tt.expectedErr, err) {
 				t.Errorf("loadLaunchConfiguration received error status: %+v expected %+v",
@@ -853,6 +855,11 @@ func TestLoadLaunchConfiguration(t *testing.T) {
 			if !reflect.DeepEqual(tt.expectedLC, lc) {
 				t.Errorf("loadLaunchConfiguration received: %+v expected %+v",
 					lc, tt.expectedLC)
+			}
+
+			if lc != a.launchConfiguration {
+				t.Errorf("loadLaunchConfiguration returned %+v but set member field launchConfiguration to %+v",
+					lc, a.launchConfiguration)
 			}
 		})
 	}
@@ -922,6 +929,7 @@ func TestScanInstances(t *testing.T) {
 							typeInfo: instanceTypeInformation{
 								pricing: prices{
 									onDemand: 0.5,
+									premium:  0.0,
 									spot: map[string]float64{
 										"az-1": 0.1,
 										"az-2": 0.2,
@@ -940,6 +948,7 @@ func TestScanInstances(t *testing.T) {
 							typeInfo: instanceTypeInformation{
 								pricing: prices{
 									onDemand: 0.8,
+									premium:  0.0,
 									spot: map[string]float64{
 										"az-1": 0.4,
 										"az-2": 0.5,
@@ -1207,22 +1216,8 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 				},
 			),
-			az: aws.String("1b"),
-			expected: &instance{
-				Instance: &ec2.Instance{
-					InstanceId:        aws.String("ondemand-running"),
-					State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-					Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
-					InstanceLifecycle: aws.String(""),
-				},
-				region: &region{
-					services: connections{
-						ec2: mockEC2{
-							diaerr: errors.New("error when determining instance termination protection"),
-						},
-					},
-				},
-			},
+			az:       aws.String("1b"),
+			expected: nil,
 		},
 
 		{
@@ -2982,6 +2977,298 @@ func Test_autoScalingGroup_getAnyUnprotectedOnDemandInstance(t *testing.T) {
 			}
 			if got := a.getAnyUnprotectedOnDemandInstance(); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("autoScalingGroup.getAnyUnprotectedOnDemandInstance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_autoScalingGroup_licensedToRun(t *testing.T) {
+
+	tests := []struct {
+		name    string
+		asg     autoScalingGroup
+		want    bool
+		wantErr bool
+	}{
+		{
+			name: "On-demand-only",
+			asg: autoScalingGroup{
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"ondemand-1": {
+							price: 1.0,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+						"ondemand-2": {
+							price: 1.0,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+
+		{
+			name: "spot-less-than-1000-monthly",
+			asg: autoScalingGroup{
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.9,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.9,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+
+		{
+			name: "spot-more-than-1000-monthly-evaluation",
+			asg: autoScalingGroup{
+				region: &region{
+					conf: &Config{
+						LicenseType: "evaluation",
+						Version:     "nightly",
+					},
+				},
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+					}),
+			},
+			want:    false,
+			wantErr: true,
+		},
+
+		{
+			name: "spot-more-than-1000-monthly-custom",
+			asg: autoScalingGroup{
+				region: &region{
+					conf: &Config{
+						LicenseType: "evaluation",
+						Version:     "custom",
+					},
+				},
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+
+		{
+			name: "spot-more-than-1000-monthly-patron",
+			asg: autoScalingGroup{
+				region: &region{
+					conf: &Config{
+						LicenseType: "I_am_supporting_it_on_Patreon",
+						Version:     "nightly",
+					},
+				},
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := tt.asg
+
+			got, err := a.licensedToRun()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("autoScalingGroup.licensedToRun() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("autoScalingGroup.licensedToRun() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_autoScalingGroup_calculateHourlySavings(t *testing.T) {
+	tests := []struct {
+		name      string
+		instances instances
+		want      float64
+	}{
+		{
+			name: "On-demand-only",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-1": {
+						price: 1.0,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+					"ondemand-2": {
+						price: 1.0,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+				}),
+			want: 0,
+		},
+
+		{
+			name: "spot-only",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"spot-1": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+					"spot-2": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+				}),
+			want: 1.8,
+		},
+
+		{
+			name: "spot-and-on-demand",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-1": {
+						price: 1.0,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+					"spot-1": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+				}),
+			want: 0.9,
+		},
+		{
+			name: "premium-instance",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-1": {
+						price: 1.6,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+								premium:  0.6,
+							},
+						},
+					},
+					"spot-1": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+								premium:  0.6,
+							},
+						},
+					},
+				}),
+			want: 1.5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &autoScalingGroup{
+				instances: tt.instances,
+			}
+			if got := a.calculateHourlySavings(); got != tt.want {
+				t.Errorf("autoScalingGroup.calculateHourlySavings() = %v, want %v", got, tt.want)
 			}
 		})
 	}

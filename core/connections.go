@@ -1,3 +1,6 @@
+// Copyright (c) 2016-2019 Cristian Măgherușan-Stanciu
+// Licensed under the Open Software License version 3.0
+
 // This stores a bunch of sessions to various AWS APIs, in order to avoid
 // connecting to them over and over again.
 
@@ -29,7 +32,7 @@ func (c *connections) setSession(region string) {
 
 func (c *connections) connect(region string) {
 
-	logger.Println("Creating Service connections in", region)
+	debug.Println("Creating service connections in", region)
 
 	if c.session == nil {
 		c.setSession(region)
@@ -45,5 +48,5 @@ func (c *connections) connect(region string) {
 
 	c.autoScaling, c.ec2, c.cloudFormation, c.region = <-asConn, <-ec2Conn, <-cloudformationConn, region
 
-	logger.Println("Created service connections in", region)
+	debug.Println("Created service connections in", region)
 }
