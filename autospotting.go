@@ -10,9 +10,9 @@ import (
 	"os"
 
 	// autospotting "github.com/AutoSpotting/AutoSpotting/core"
+	autospotting "github.com/jjones-smug/autospotting"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	autospotting "github.com/jjones-smug/autospotting"
 )
 
 var conf autospotting.Config
