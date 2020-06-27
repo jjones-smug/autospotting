@@ -150,21 +150,6 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 			expectedCount:    1,
 			expectedTotal:    2,
 		},
-		{name: "Number lower than percentage and both valid so take the percentage",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("75"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("2"),
-				},
-			},
 		{name: "ASG has no 'running' spot instances in the AZ",
 			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
@@ -185,36 +170,6 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 					},
 				},
 			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  3,
-			loadingExpected: true,
-		},
-		{name: "Number higher than percentage and both valid so take the number",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("10"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("3"),
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-					"id-4": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  3,
-			loadingExpected: true,
 			spot:             true,
 			availabilityZone: aws.String("eu-west-1c"),
 			expectedCount:    0,

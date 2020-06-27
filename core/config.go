@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/endpoints"
-        ec2instancesinfo "github.com/jjones-smug/ec2-instances-info"
+	ec2instancesinfo "github.com/jjones-smug/ec2-instances-info"
 	"github.com/namsral/flag"
 )
 

@@ -88,13 +88,13 @@ const (
 	// can override the global value of the PatchBeanstalkUserdata parameter
 	PatchBeanstalkUserdataTag = "patch_beanstalk_userdata"
 
-        // Workaround: Maximum value for initial grace period, which can override
+	// Workaround: Maximum value for initial grace period, which can override
 	// the setting pulled from the ASG configs for the group.
-        DefaultMaxGracePeriod = 390
+	DefaultMaxGracePeriod = 390
 
 	// Maximum amount of time a spot request can be "open" before it's cancelled.
 	// Specify an offset, in seconds, to be added to the time the request is made.
-        DefaultSpotRequestWaitTime = 40
+	DefaultSpotRequestWaitTime = 40
 )
 
 // AutoScalingConfig stores some group-specific configurations that can override
@@ -191,18 +191,23 @@ func (a *autoScalingGroup) loadConfOnDemand() bool {
 		OnDemandNumberLong:    a.loadNumberOnDemand,
 	}
 
+	foundLimit := false
 	for _, tagKey := range tagList {
 		if tagValue := a.getTagValue(tagKey); tagValue != nil {
 			if _, ok := loadDyn[tagKey]; ok {
 				if newValue, done := loadDyn[tagKey](tagValue); done {
-					a.minOnDemand = newValue
-					return done
+					if !foundLimit {
+						a.minOnDemand = newValue
+						foundLimit = done
+					} else if newValue > a.minOnDemand {
+						a.minOnDemand = newValue
+					}
 				}
 			}
 		}
 		debug.Println("Couldn't find tag", tagKey)
 	}
-	return false
+	return foundLimit
 }
 
 func (a *autoScalingGroup) loadPatchBeanstalkUserdata() {
