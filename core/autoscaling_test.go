@@ -1,3 +1,6 @@
+// Copyright (c) 2016-2019 Cristian Măgherușan-Stanciu
+// Licensed under the Open Software License version 3.0
+
 package autospotting
 
 import (
@@ -8,309 +11,144 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/davecgh/go-spew/spew"
 )
 
-func TestGetTagValue(t *testing.T) {
-
+func TestAlreadyRunningInstanceCount(t *testing.T) {
 	tests := []struct {
-		name     string
-		asgTags  []*autoscaling.TagDescription
-		tagKey   string
-		expected *string
+		name             string
+		asgName          string
+		asgInstances     instances
+		spot             bool
+		availabilityZone *string
+		expectedCount    int64
+		expectedTotal    int64
 	}{
-		{name: "Tag can't be found in ASG (no tags)",
-			asgTags:  []*autoscaling.TagDescription{},
-			tagKey:   "spot-enabled",
-			expected: nil,
+		{name: "ASG has no instance at all",
+			asgName:          "test-asg",
+			asgInstances:     makeInstances(),
+			spot:             true,
+			availabilityZone: nil,
+			expectedCount:    0,
+			expectedTotal:    0,
 		},
-		{name: "Tag can't be found in ASG (many tags)",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String("env"),
-					Value: aws.String("prod"),
-				},
-			},
-			tagKey:   "spot-enabled",
-			expected: nil,
-		},
-		{name: "Tag can be found in ASG (many tags)",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String("env"),
-					Value: aws.String("prod"),
-				},
-				{
-					Key:   aws.String("spot-enabled"),
-					Value: aws.String("true"),
-				},
-			},
-			tagKey:   "spot-enabled",
-			expected: aws.String("true"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := autoScalingGroup{Group: &autoscaling.Group{}}
-			a.Tags = tt.asgTags
-			retValue := a.getTagValue(tt.tagKey)
-			if tt.expected == nil && retValue != tt.expected {
-				t.Errorf("getTagValue received for %s: %s expected %s", tt.tagKey, *retValue, *tt.expected)
-			} else if tt.expected != nil && *retValue != *tt.expected {
-				t.Errorf("getTagValue received for %s: %s expected %s", tt.tagKey, *retValue, *tt.expected)
-			}
-		})
-	}
-}
-
-func TestLoadConfOnDemand(t *testing.T) {
-	tests := []struct {
-		name            string
-		asgTags         []*autoscaling.TagDescription
-		asgInstances    instances
-		maxSize         *int64
-		numberExpected  int64
-		loadingExpected bool
-	}{
-		{name: "ASG does not have any conf tags",
-			asgTags:         []*autoscaling.TagDescription{},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Percentage value not a number",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("text"),
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Percentage value out of range (0-100)",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("142.2"),
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Percentage value out of range - negative (0-100)",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("-22"),
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Percentage equals 0.00%",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("0"),
-				},
-			},
+		{name: "ASG has no 'running' instance but has some",
+			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {}},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  0,
-			loadingExpected: true,
-		},
-		{name: "Percentage equals 33.0%",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("33.0"),
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
 				},
 			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  1,
-			loadingExpected: true,
+			spot:             true,
+			availabilityZone: nil,
+			expectedCount:    0,
+			expectedTotal:    0,
 		},
-		{name: "Percentage equals 75.0%",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("75.0"),
-				},
-			},
+		{name: "ASG has no 'running' spot instances but has some",
+			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
+							InstanceLifecycle: aws.String("on-demand"),
+						},
+					},
+					"id-2": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
+							InstanceLifecycle: aws.String("on-demand"),
+						},
+					},
 				},
 			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  2,
-			loadingExpected: true,
+			spot:             true,
+			availabilityZone: nil,
+			expectedCount:    0,
+			expectedTotal:    2,
 		},
-		{name: "Percentage equals 100.0%",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("100.0"),
-				},
-			},
+		{name: "ASG has no 'running' on-demand instances but has some",
+			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"id-2": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
 				},
 			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  3,
-			loadingExpected: true,
+			spot:             false,
+			availabilityZone: nil,
+			expectedCount:    0,
+			expectedTotal:    2,
 		},
-		{name: "Number passed is text",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("text"),
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Number passed is an invalid integer",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("2.5"),
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Number passed out of range (negative)",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("-7"),
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Number superior to ASG size",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("50"),
-				},
-			},
+		{name: "ASG has no 'running' on-demand instances in the AZ",
+			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
+							InstanceLifecycle: aws.String("on-demand"),
+						},
+					},
+					"id-2": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
+							InstanceLifecycle: aws.String("on-demand"),
+						},
+					},
 				},
 			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
+			spot:             false,
+			availabilityZone: aws.String("eu-west-1c"),
+			expectedCount:    0,
+			expectedTotal:    2,
 		},
-		{name: "Number is valid 1",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("1"),
-				},
-			},
+		{name: "ASG has some 'running' on-demand instances in the AZ",
+			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
+							InstanceLifecycle: aws.String("on-demand"),
+						},
+					},
+					"id-2": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
+							InstanceLifecycle: aws.String("on-demand"),
+						},
+					},
 				},
 			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  1,
-			loadingExpected: true,
+			spot:             false,
+			availabilityZone: aws.String("eu-west-1b"),
+			expectedCount:    1,
+			expectedTotal:    2,
 		},
 		{name: "Number lower than percentage and both valid so take the percentage",
 			asgTags: []*autoscaling.TagDescription{
@@ -327,12 +165,24 @@ func TestLoadConfOnDemand(t *testing.T) {
 					Value: aws.String("2"),
 				},
 			},
+		{name: "ASG has no 'running' spot instances in the AZ",
+			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-					"id-4": {},
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"id-2": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
 				},
 			),
 			maxSize:         aws.Int64(10),
@@ -365,742 +215,15 @@ func TestLoadConfOnDemand(t *testing.T) {
 			maxSize:         aws.Int64(10),
 			numberExpected:  3,
 			loadingExpected: true,
-		},
-		{name: "Number is invalid so percentage value is used",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("75"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("-2"),
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-					"id-4": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  3,
-			loadingExpected: true,
-		},
-		{name: "Both number and percentage are invalid",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("-75"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("200"),
-				},
-			},
-			maxSize:         aws.Int64(10),
-			asgInstances:    makeInstances(),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := autoScalingGroup{Group: &autoscaling.Group{}}
-			a.Tags = tt.asgTags
-			a.instances = tt.asgInstances
-			a.MaxSize = tt.maxSize
-			done := a.loadConfOnDemand()
-			if tt.loadingExpected != done {
-				t.Errorf("loadConfOnDemand returned: %t expected %t", done, tt.loadingExpected)
-			} else if tt.numberExpected != a.minOnDemand {
-				t.Errorf("loadConfOnDemand, minOnDemand value received %d, expected %d",
-					a.minOnDemand, tt.numberExpected)
-			}
-		})
-	}
-}
-
-func TestLoadDefaultConf(t *testing.T) {
-	tests := []struct {
-		name            string
-		asgInstances    instances
-		region          *region
-		maxSize         *int64
-		numberExpected  int64
-		loadingExpected bool
-	}{
-		{name: "No configuration given",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     0,
-					MinOnDemandPercentage: 0.0,
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Percentage value out of range (0-100)",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     0,
-					MinOnDemandPercentage: 142.2,
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Percentage value out of range - negative (0-100)",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     0,
-					MinOnDemandPercentage: -22.2,
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Percentage equals 33.0%",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     0,
-					MinOnDemandPercentage: 33.0,
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  1,
-			loadingExpected: true,
-		},
-		{name: "Percentage equals 75.0%",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     0,
-					MinOnDemandPercentage: 75.0,
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  2,
-			loadingExpected: true,
-		},
-		{name: "Percentage equals 100.0%",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     0,
-					MinOnDemandPercentage: 100,
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  3,
-			loadingExpected: true,
-		},
-		{name: "Number passed out of range (negative)",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     -4,
-					MinOnDemandPercentage: 0,
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Number superior to ASG size",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     50,
-					MinOnDemandPercentage: 0,
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-		{name: "Number is valid 1",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     1,
-					MinOnDemandPercentage: 0,
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  1,
-			loadingExpected: true,
-		},
-		{name: "Number has priority on percentage value",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     2,
-					MinOnDemandPercentage: 75,
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-					"id-4": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  2,
-			loadingExpected: true,
-		},
-		{name: "Number is invalid so percentage value is used",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     -20,
-					MinOnDemandPercentage: 75.0,
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-					"id-4": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			numberExpected:  3,
-			loadingExpected: true,
-		},
-		{name: "Both number and percentage are invalid",
-			region: &region{
-				conf: &Config{
-					MinOnDemandNumber:     -10,
-					MinOnDemandPercentage: 142.2,
-				},
-			},
-			maxSize:         aws.Int64(10),
-			asgInstances:    makeInstances(),
-			numberExpected:  DefaultMinOnDemandValue,
-			loadingExpected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := autoScalingGroup{Group: &autoscaling.Group{}}
-			a.instances = tt.asgInstances
-			a.MaxSize = tt.maxSize
-			a.region = tt.region
-			done := a.loadDefaultConfig()
-			if tt.loadingExpected != done {
-				t.Errorf("loadDefaultConfig returned: %t expected %t", done, tt.loadingExpected)
-			} else if tt.numberExpected != a.minOnDemand {
-				t.Errorf("loadDefaultConfig, minOnDemand value received %d, expected %d",
-					a.minOnDemand, tt.numberExpected)
-			}
-		})
-	}
-}
-
-func TestLoadConfigFromTags(t *testing.T) {
-	tests := []struct {
-		name            string
-		asgTags         []*autoscaling.TagDescription
-		asgInstances    instances
-		maxSize         *int64
-		loadingExpected bool
-	}{
-		{name: "Percentage value not a number",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("text"),
-				},
-				{
-					Key:   aws.String(BiddingPolicyTag),
-					Value: aws.String("Autospotting"),
-				},
-				{
-					Key:   aws.String(SpotPriceBufferPercentageTag),
-					Value: aws.String("-15.0"),
-				},
-			},
-			asgInstances:    makeInstances(),
-			maxSize:         aws.Int64(10),
-			loadingExpected: false,
-		},
-		{name: "Number is invalid so percentage value is used",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(OnDemandPercentageTag),
-					Value: aws.String("75"),
-				},
-				{
-					Key:   aws.String(OnDemandNumberLong),
-					Value: aws.String("-2"),
-				},
-				{
-					Key:   aws.String(BiddingPolicyTag),
-					Value: aws.String("normal"),
-				},
-				{
-					Key:   aws.String(SpotPriceBufferPercentageTag),
-					Value: aws.String("15.0"),
-				},
-			},
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {},
-					"id-2": {},
-					"id-3": {},
-					"id-4": {},
-				},
-			),
-			maxSize:         aws.Int64(10),
-			loadingExpected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				BiddingPolicy:             "normal",
-				SpotPriceBufferPercentage: 10.0,
-			}
-			a := autoScalingGroup{Group: &autoscaling.Group{},
-				region: &region{
-					name: "us-east-1",
-					conf: cfg,
-				},
-			}
-			a.Tags = tt.asgTags
-			a.instances = tt.asgInstances
-			a.MaxSize = tt.maxSize
-
-			done := a.loadConfigFromTags()
-			if tt.loadingExpected != done {
-				t.Errorf("loadConfigFromTags returned: %t expected %t", done, tt.loadingExpected)
-			}
-		})
-	}
-}
-
-func TestLoadSpotPriceBufferPercentage(t *testing.T) {
-	tests := []struct {
-		tagValue        *string
-		loadingExpected bool
-		valueExpected   float64
-	}{
-		{
-			tagValue:        aws.String("5.0"),
-			valueExpected:   5.0,
-			loadingExpected: true,
-		},
-		{
-			tagValue:        aws.String("TEST"),
-			valueExpected:   10.0,
-			loadingExpected: false,
-		},
-		{
-			tagValue:        aws.String("-10.0"),
-			valueExpected:   10.0,
-			loadingExpected: false,
-		},
-	}
-	for _, tt := range tests {
-		a := autoScalingGroup{Group: &autoscaling.Group{}}
-		value, loading := a.loadSpotPriceBufferPercentage(tt.tagValue)
-
-		if value != tt.valueExpected || loading != tt.loadingExpected {
-			t.Errorf("LoadBiddingPolicy returned: %f, expected: %f", value, tt.valueExpected)
-		}
-
-	}
-}
-
-func TestLoadBiddingPolicy(t *testing.T) {
-	tests := []struct {
-		name          string
-		tagValue      *string
-		valueExpected string
-	}{
-		{name: "Loading a false tag",
-			tagValue:      aws.String("aggressive"),
-			valueExpected: "aggressive",
-		},
-		{name: "Loading a true tag",
-			tagValue:      aws.String("normal"),
-			valueExpected: "normal",
-		},
-		{name: "Loading a fake tag",
-			tagValue:      aws.String("autospotting"),
-			valueExpected: "normal",
-		},
-	}
-	for _, tt := range tests {
-		a := autoScalingGroup{Group: &autoscaling.Group{}}
-		value, _ := a.loadBiddingPolicy(tt.tagValue)
-
-		if value != tt.valueExpected {
-			t.Errorf("LoadBiddingPolicy returned: %s, expected: %s", value, tt.valueExpected)
-		}
-
-	}
-}
-
-func TestLoadConfSpot(t *testing.T) {
-	tests := []struct {
-		name            string
-		asgTags         []*autoscaling.TagDescription
-		loadingExpected bool
-		valueExpected   string
-	}{
-		{name: "Loading a fake tag",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-			},
-			loadingExpected: false,
-			valueExpected:   "normal",
-		},
-		{name: "Loading a false tag",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(BiddingPolicyTag),
-					Value: aws.String("aggressive"),
-				},
-			},
-			loadingExpected: true,
-			valueExpected:   "aggressive",
-		},
-		{name: "Loading a true tag",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(BiddingPolicyTag),
-					Value: aws.String("normal"),
-				},
-			},
-			loadingExpected: false,
-			valueExpected:   "normal",
-		},
-	}
-	for _, tt := range tests {
-		cfg := &Config{
-			BiddingPolicy: "normal",
-		}
-		a := autoScalingGroup{Group: &autoscaling.Group{},
-			region: &region{
-				name: "us-east-1",
-				conf: cfg,
-			},
-		}
-		a.Tags = tt.asgTags
-		done := a.loadConfSpot()
-		if tt.loadingExpected != done {
-			t.Errorf("LoadSpotConf retured: %t expected %t", done, tt.loadingExpected)
-		} else if tt.valueExpected != a.region.conf.BiddingPolicy {
-			t.Errorf("LoadSpotConf loaded: %s expected %s", a.region.conf.BiddingPolicy, tt.valueExpected)
-		}
-
-	}
-}
-
-func TestLoadConfSpotPrice(t *testing.T) {
-	tests := []struct {
-		name            string
-		asgTags         []*autoscaling.TagDescription
-		loadingExpected bool
-		valueExpected   float64
-	}{
-		{name: "Loading a fake tag",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-			},
-			loadingExpected: false,
-			valueExpected:   10.0,
-		},
-		{name: "Loading the right tag",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(SpotPriceBufferPercentageTag),
-					Value: aws.String("15.0"),
-				},
-			},
-			loadingExpected: true,
-			valueExpected:   15.0,
-		},
-		{name: "Loading a false tag",
-			asgTags: []*autoscaling.TagDescription{
-				{
-					Key:   aws.String("Name"),
-					Value: aws.String("asg-test"),
-				},
-				{
-					Key:   aws.String(SpotPriceBufferPercentageTag),
-					Value: aws.String("-50.0"),
-				},
-			},
-			loadingExpected: false,
-			valueExpected:   10.0,
-		},
-	}
-	for _, tt := range tests {
-		cfg := &Config{
-			SpotPriceBufferPercentage: 10.0,
-		}
-		a := autoScalingGroup{Group: &autoscaling.Group{},
-			region: &region{
-				name: "us-east-1",
-				conf: cfg,
-			},
-		}
-		a.Tags = tt.asgTags
-		done := a.loadConfSpotPrice()
-		if tt.loadingExpected != done {
-			t.Errorf("LoadSpotConf retured: %t expected %t", done, tt.loadingExpected)
-		} else if tt.valueExpected != a.region.conf.SpotPriceBufferPercentage {
-			t.Errorf("LoadSpotConf loaded: %f expected %f", a.region.conf.SpotPriceBufferPercentage, tt.valueExpected)
-		}
-
-	}
-}
-
-func TestAlreadyRunningInstanceCount(t *testing.T) {
-	tests := []struct {
-		name             string
-		asgName          string
-		asgInstances     instances
-		spot             bool
-		availabilityZone string
-		expectedCount    int64
-		expectedTotal    int64
-	}{
-		{name: "ASG has no instance at all",
-			asgName:          "test-asg",
-			asgInstances:     makeInstances(),
 			spot:             true,
-			availabilityZone: "",
-			expectedCount:    0,
-			expectedTotal:    0,
-		},
-		{name: "ASG has no 'running' instance but has some",
-			asgName: "test-asg",
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
-							InstanceLifecycle: aws.String("spot"),
-						},
-					},
-				},
-			),
-			spot:             true,
-			availabilityZone: "",
-			expectedCount:    0,
-			expectedTotal:    0,
-		},
-		{name: "ASG has no 'running' spot instances but has some",
-			asgName: "test-asg",
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
-							InstanceLifecycle: aws.String("on-demand"),
-						},
-					},
-					"id-2": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
-							InstanceLifecycle: aws.String("on-demand"),
-						},
-					},
-				},
-			),
-			spot:             true,
-			availabilityZone: "",
-			expectedCount:    0,
-			expectedTotal:    2,
-		},
-		{name: "ASG has no 'running' on-demand instances but has some",
-			asgName: "test-asg",
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
-							InstanceLifecycle: aws.String("spot"),
-						},
-					},
-					"id-2": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
-							InstanceLifecycle: aws.String("spot"),
-						},
-					},
-				},
-			),
-			spot:             false,
-			availabilityZone: "",
-			expectedCount:    0,
-			expectedTotal:    2,
-		},
-		{name: "ASG has no 'running' on-demand instances in the AZ",
-			asgName: "test-asg",
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
-							InstanceLifecycle: aws.String("on-demand"),
-						},
-					},
-					"id-2": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
-							InstanceLifecycle: aws.String("on-demand"),
-						},
-					},
-				},
-			),
-			spot:             false,
-			availabilityZone: "eu-west-1c",
-			expectedCount:    0,
-			expectedTotal:    2,
-		},
-		{name: "ASG has some 'running' on-demand instances in the AZ",
-			asgName: "test-asg",
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
-							InstanceLifecycle: aws.String("on-demand"),
-						},
-					},
-					"id-2": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
-							InstanceLifecycle: aws.String("on-demand"),
-						},
-					},
-				},
-			),
-			spot:             false,
-			availabilityZone: "eu-west-1b",
-			expectedCount:    1,
-			expectedTotal:    2,
-		},
-		{name: "ASG has no 'running' spot instances in the AZ",
-			asgName: "test-asg",
-			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
-					"id-1": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
-							InstanceLifecycle: aws.String("spot"),
-						},
-					},
-					"id-2": {
-						Instance: &ec2.Instance{
-							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
-							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
-							InstanceLifecycle: aws.String("spot"),
-						},
-					},
-				},
-			),
-			spot:             true,
-			availabilityZone: "eu-west-1c",
+			availabilityZone: aws.String("eu-west-1c"),
 			expectedCount:    0,
 			expectedTotal:    2,
 		},
 		{name: "ASG has some 'running' spot instances in any AZ",
 			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
@@ -1118,14 +241,14 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             true,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    2,
 			expectedTotal:    2,
 		},
 		{name: "ASG has no 'running' spot instances in any AZ",
 			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameShuttingDown)},
@@ -1143,14 +266,14 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             true,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    1,
 		},
 		{name: "ASG has some 'running' on-demand instances in any AZ",
 			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
@@ -1168,14 +291,14 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             false,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    1,
 			expectedTotal:    2,
 		},
 		{name: "ASG has no 'running' on-demand instances in any AZ",
 			asgName: "test-asg",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
@@ -1193,7 +316,7 @@ func TestAlreadyRunningInstanceCount(t *testing.T) {
 				},
 			),
 			spot:             false,
-			availabilityZone: "",
+			availabilityZone: nil,
 			expectedCount:    0,
 			expectedTotal:    1,
 		},
@@ -1223,6 +346,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 		minOnDemand     int64
 		desiredCapacity *int64
 		expectedRun     bool
+		regionASG       *region
 	}{
 		{name: "ASG has no instance at all - 1 on-demand required",
 			asgInstances:    makeInstances(),
@@ -1238,7 +362,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 		},
 		{name: "ASG has no instance running - 1 on-demand required",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameShuttingDown)},
@@ -1261,7 +385,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 		},
 		{name: "ASG has no instance running - 0 on-demand required",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameShuttingDown)},
@@ -1284,7 +408,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 		},
 		{name: "ASG has not the required on-demand running",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							InstanceId:        aws.String("id-1"),
@@ -1312,10 +436,17 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 			minOnDemand:     2,
 			desiredCapacity: aws.Int64(0),
 			expectedRun:     false,
+			regionASG: &region{
+				name: "regionTest",
+				services: connections{
+					autoScaling: mockASG{},
+				},
+				conf: &Config{},
+			},
 		},
 		{name: "ASG has just enough on-demand instances running",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
@@ -1338,7 +469,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 		},
 		{name: "ASG has only one remaining instance, less than enough on-demand",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
@@ -1354,7 +485,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 		},
 		{name: "ASG has more than enough on-demand instances running but not desired capacity",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
@@ -1377,7 +508,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 		},
 		{name: "ASG has more than enough on-demand instances running and desired capacity",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"id-1": {
 						Instance: &ec2.Instance{
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
@@ -1398,6 +529,29 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 			desiredCapacity: aws.Int64(4),
 			expectedRun:     true,
 		},
+		{name: "ASG has on-demand instances equal to the min on-demand number",
+			asgInstances: makeInstancesWithCatalog(
+				map[string]*instance{
+					"id-1": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1a")},
+							InstanceLifecycle: aws.String("on-demand"),
+						},
+					},
+					"id-2": {
+						Instance: &ec2.Instance{
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("eu-west-1b")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+				},
+			),
+			minOnDemand:     1,
+			desiredCapacity: aws.Int64(2),
+			expectedRun:     false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1407,6 +561,7 @@ func TestNeedReplaceOnDemandInstances(t *testing.T) {
 			a.DesiredCapacity = tt.desiredCapacity
 			a.instances = tt.asgInstances
 			a.minOnDemand = tt.minOnDemand
+			a.region = tt.regionASG
 			shouldRun := a.needReplaceOnDemandInstances()
 			if tt.expectedRun != shouldRun {
 				t.Errorf("needReplaceOnDemandInstances returned: %t expected %t",
@@ -1426,7 +581,7 @@ func TestDetachAndTerminateOnDemandInstance(t *testing.T) {
 	}{
 		{name: "no err during detach nor terminate",
 			instancesASG: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"1": {
 						Instance: &ec2.Instance{
 							InstanceId: aws.String("1"),
@@ -1454,7 +609,7 @@ func TestDetachAndTerminateOnDemandInstance(t *testing.T) {
 		},
 		{name: "err during detach not during terminate",
 			instancesASG: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"1": {
 						Instance: &ec2.Instance{
 							InstanceId: aws.String("1"),
@@ -1482,7 +637,7 @@ func TestDetachAndTerminateOnDemandInstance(t *testing.T) {
 		},
 		{name: "no err during detach but error during terminate",
 			instancesASG: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"1": {
 						Instance: &ec2.Instance{
 							InstanceId: aws.String("1"),
@@ -1510,7 +665,7 @@ func TestDetachAndTerminateOnDemandInstance(t *testing.T) {
 		},
 		{name: "errors during detach and terminate",
 			instancesASG: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"1": {
 						Instance: &ec2.Instance{
 							InstanceId: aws.String("1"),
@@ -1546,6 +701,85 @@ func TestDetachAndTerminateOnDemandInstance(t *testing.T) {
 				instances: tt.instancesASG,
 			}
 			err := a.detachAndTerminateOnDemandInstance(tt.instanceID)
+			CheckErrors(t, err, tt.expected)
+		})
+	}
+}
+
+func TestTerminateInstanceInAutoScalingGroup(t *testing.T) {
+	tests := []struct {
+		name         string
+		instancesASG instances
+		regionASG    *region
+		instanceID   *string
+		expected     error
+	}{
+		{name: "no err during terminate",
+			instancesASG: makeInstancesWithCatalog(
+				map[string]*instance{
+					"1": {
+						Instance: &ec2.Instance{
+							InstanceId: aws.String("1"),
+							State: &ec2.InstanceState{
+								Name: aws.String(ec2.InstanceStateNameRunning),
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{},
+							},
+						},
+					},
+				},
+			),
+			regionASG: &region{
+				name: "regionTest",
+				services: connections{
+					autoScaling: mockASG{tiiasgerr: nil},
+				},
+				conf: &Config{},
+			},
+			instanceID: aws.String("1"),
+			expected:   nil,
+		},
+		{name: "errors during terminate",
+			instancesASG: makeInstancesWithCatalog(
+				map[string]*instance{
+					"1": {
+						Instance: &ec2.Instance{
+							InstanceId: aws.String("1"),
+							State: &ec2.InstanceState{
+								Name: aws.String(ec2.InstanceStateNameRunning),
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{},
+							},
+						},
+					},
+				},
+			),
+			regionASG: &region{
+				name: "regionTest",
+				services: connections{
+					autoScaling: mockASG{tiiasgerr: errors.New("terminate-asg")},
+				},
+				conf: &Config{},
+			},
+			instanceID: aws.String("1"),
+			expected:   errors.New("terminate-asg"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := autoScalingGroup{
+				name:      "testASG",
+				region:    tt.regionASG,
+				instances: tt.instancesASG,
+			}
+			err := a.terminateInstanceInAutoScalingGroup(tt.instanceID)
 			CheckErrors(t, err, tt.expected)
 		})
 	}
@@ -1607,7 +841,7 @@ func TestLoadLaunchConfiguration(t *testing.T) {
 						dlcerr: nil},
 				},
 			},
-			expectedErr: errors.New("missing launch configuration"),
+			expectedErr: nil,
 			expectedLC:  nil,
 		},
 		{name: "no err during get launch configuration",
@@ -1656,8 +890,7 @@ func TestLoadLaunchConfiguration(t *testing.T) {
 					LaunchConfigurationName: tt.nameLC,
 				},
 			}
-			err := a.loadLaunchConfiguration()
-			lc := a.launchConfiguration
+			lc, err := a.loadLaunchConfiguration()
 
 			if !reflect.DeepEqual(tt.expectedErr, err) {
 				t.Errorf("loadLaunchConfiguration received error status: %+v expected %+v",
@@ -1667,6 +900,11 @@ func TestLoadLaunchConfiguration(t *testing.T) {
 			if !reflect.DeepEqual(tt.expectedLC, lc) {
 				t.Errorf("loadLaunchConfiguration received: %+v expected %+v",
 					lc, tt.expectedLC)
+			}
+
+			if lc != a.launchConfiguration {
+				t.Errorf("loadLaunchConfiguration returned %+v but set member field launchConfiguration to %+v",
+					lc, a.launchConfiguration)
 			}
 		})
 	}
@@ -1719,12 +957,12 @@ func TestScanInstances(t *testing.T) {
 		name              string
 		ec2ASG            *autoscaling.Group
 		regionInstances   *region
-		expectedInstances map[string]*instance
+		expectedInstances instanceMap
 	}{
 		{name: "multiple instances to scan",
 			regionInstances: &region{
 				instances: makeInstancesWithCatalog(
-					map[string]*instance{
+					instanceMap{
 						"1": {
 							Instance: &ec2.Instance{
 								InstanceId: aws.String("1"),
@@ -1736,6 +974,7 @@ func TestScanInstances(t *testing.T) {
 							typeInfo: instanceTypeInformation{
 								pricing: prices{
 									onDemand: 0.5,
+									premium:  0.0,
 									spot: map[string]float64{
 										"az-1": 0.1,
 										"az-2": 0.2,
@@ -1754,6 +993,7 @@ func TestScanInstances(t *testing.T) {
 							typeInfo: instanceTypeInformation{
 								pricing: prices{
 									onDemand: 0.8,
+									premium:  0.0,
 									spot: map[string]float64{
 										"az-1": 0.4,
 										"az-2": 0.5,
@@ -1771,11 +1011,12 @@ func TestScanInstances(t *testing.T) {
 					{
 						InstanceId:           aws.String("2"),
 						ProtectedFromScaleIn: aws.Bool(true),
+						AvailabilityZone:     aws.String("1a"),
 					},
 					{InstanceId: aws.String("3")},
 				},
 			},
-			expectedInstances: map[string]*instance{
+			expectedInstances: instanceMap{
 				"1": {
 					Instance: &ec2.Instance{
 						InstanceId: aws.String("1"),
@@ -1852,11 +1093,13 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 		az           *string
 		expected     *instance
 	}{
-		{name: "ASG has no 'running' instance in AZ",
+		{
+			name: "ASG has no 'running' instance in the current AZ but only in other AZs",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -1864,6 +1107,7 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"spot-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -1871,6 +1115,7 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -1878,20 +1123,35 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"ondemand-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
 						},
 					},
 				},
 			),
-			az: aws.String("1c"),
+			az:       aws.String("1c"),
+			expected: nil,
 		},
-		{name: "ASG has 'running' instance in AZ",
+		{
+			name: "ASG has 'running' instance in AZ",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -1899,6 +1159,7 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"spot-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -1906,6 +1167,7 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -1913,9 +1175,21 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"ondemand-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -1923,17 +1197,32 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 			az: aws.String("1b"),
 			expected: &instance{
 				Instance: &ec2.Instance{
+					InstanceId:        aws.String("ondemand-running"),
 					State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 					Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 					InstanceLifecycle: aws.String(""),
 				},
+				region: &region{
+					services: connections{
+						ec2: mockEC2{
+							diao: &ec2.DescribeInstanceAttributeOutput{
+								DisableApiTermination: &ec2.AttributeBooleanValue{
+									Value: aws.Bool(false),
+								},
+							},
+						},
+					},
+				},
 			},
 		},
-		{name: "ASG has no instance in AZ",
+
+		{
+			name: "ASG has 'running' instance in AZ ad we we get error when trying to determine termination protection",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -1941,6 +1230,7 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"spot-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -1948,6 +1238,7 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -1955,18 +1246,199 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 					},
 					"ondemand-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
 						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diaerr: errors.New("error when determining instance termination protection"),
+								},
+							},
+						},
 					},
 				},
 			),
-			az: aws.String("2a"),
+			az:       aws.String("1b"),
+			expected: nil,
 		},
-		{name: "ASG has no instance at all",
+
+		{
+			name: "ASG has 'running' but protected from termination instance in AZ",
+			asgInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"spot-stopped": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"spot-running": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"ondemand-stopped": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+							InstanceLifecycle: aws.String(""),
+						},
+					},
+					"ondemand-running": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String(""),
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			),
+			az:       aws.String("1b"),
+			expected: nil,
+		},
+		{
+			name: "ASG has 'running' but protected from ASG scale-in instance in AZ",
+			asgInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"spot-stopped": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"spot-running": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"ondemand-stopped": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+							InstanceLifecycle: aws.String(""),
+						},
+					},
+					"ondemand-running": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String(""),
+						},
+						asg: &autoScalingGroup{
+							Group: &autoscaling.Group{
+								Instances: []*autoscaling.Instance{
+									{
+										InstanceId:           aws.String("ondemand-running"),
+										ProtectedFromScaleIn: aws.Bool(true),
+										AvailabilityZone:     aws.String("1b"),
+									},
+								},
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										// not protected from termination
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			),
+			az:       aws.String("1b"),
+			expected: nil,
+		},
+
+		{
+			name: "ASG has no instance in AZ",
+			asgInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"spot-stopped": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"spot-running": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String("spot"),
+						},
+					},
+					"ondemand-stopped": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+							InstanceLifecycle: aws.String(""),
+						},
+					},
+					"ondemand-running": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String(""),
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			),
+			az:       aws.String("2a"),
+			expected: nil,
+		},
+		{
+			name:         "ASG has no instance at all",
 			asgInstances: makeInstances(),
 			az:           aws.String("1a"),
+			expected:     nil,
 		},
 	}
 
@@ -1975,11 +1447,12 @@ func TestGetOnDemandInstanceInAZ(t *testing.T) {
 			a := &autoScalingGroup{
 				instances: tt.asgInstances,
 			}
-			returnedInstance := a.getOnDemandInstanceInAZ(tt.az)
+			returnedInstance := a.getUnprotectedOnDemandInstanceInAZ(tt.az)
 			if !reflect.DeepEqual(returnedInstance, tt.expected) {
-				t.Errorf("getOnDemandInstanceInAZ received: %+v, expected: %+v",
-					returnedInstance,
-					tt.expected)
+				t.Errorf("%s: getOnDemandInstanceInAZ \nreceived: %+v,\n  expected: %+v",
+					tt.name,
+					spew.Sdump(returnedInstance),
+					spew.Sdump(tt.expected))
 			}
 		})
 	}
@@ -1993,9 +1466,10 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 	}{
 		{name: "ASG has no 'running' OnDemand instance",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2003,6 +1477,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"spot-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2010,6 +1485,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -2021,9 +1497,10 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 		},
 		{name: "ASG has one 'running' OnDemand instance",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2031,6 +1508,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"spot-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2038,6 +1516,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -2045,6 +1524,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"ondemand-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
@@ -2054,6 +1534,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 			),
 			expected: []*instance{{
 				Instance: &ec2.Instance{
+					InstanceId:        aws.String("ondemand-running"),
 					State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 					Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 					InstanceLifecycle: aws.String(""),
@@ -2062,9 +1543,10 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 		},
 		{name: "ASG has multiple 'running' OnDemand instances",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2072,6 +1554,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"spot-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2079,6 +1562,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"ondemand-running1": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running1"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -2086,6 +1570,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 					},
 					"ondemand-running2": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running2"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
@@ -2096,6 +1581,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 			expected: []*instance{
 				{
 					Instance: &ec2.Instance{
+						InstanceId:        aws.String("ondemand-running2"),
 						State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 						Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 						InstanceLifecycle: aws.String(""),
@@ -2103,6 +1589,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 				},
 				{
 					Instance: &ec2.Instance{
+						InstanceId:        aws.String("ondemand-running1"),
 						State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 						Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 						InstanceLifecycle: aws.String(""),
@@ -2111,7 +1598,7 @@ func TestGetAnyOnDemandInstance(t *testing.T) {
 			},
 		},
 		{name: "ASG has no instance at all",
-			asgInstances: makeInstancesWithCatalog(map[string]*instance{}),
+			asgInstances: makeInstancesWithCatalog(instanceMap{}),
 			expected:     []*instance{},
 		},
 	}
@@ -2152,9 +1639,10 @@ func TestGetAnySpotInstance(t *testing.T) {
 	}{
 		{name: "ASG has no 'running' Spot instance",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2162,6 +1650,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("onemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
@@ -2169,6 +1658,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"ondemand-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("onemand-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -2180,9 +1670,10 @@ func TestGetAnySpotInstance(t *testing.T) {
 		},
 		{name: "ASG has one 'running' Spot instance",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2190,6 +1681,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"spot-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2197,6 +1689,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -2204,6 +1697,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"ondemand-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
@@ -2213,6 +1707,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 			),
 			expected: []*instance{{
 				Instance: &ec2.Instance{
+					InstanceId:        aws.String("spot-running"),
 					State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 					Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 					InstanceLifecycle: aws.String("spot"),
@@ -2221,9 +1716,10 @@ func TestGetAnySpotInstance(t *testing.T) {
 		},
 		{name: "ASG has multiple 'running' Spot instances",
 			asgInstances: makeInstancesWithCatalog(
-				map[string]*instance{
+				instanceMap{
 					"spot-running1": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running1"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2231,6 +1727,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"spot-running2": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("spot-running2"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String("spot"),
@@ -2238,6 +1735,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"ondemand-stopped": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-stopped"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameStopped)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
 							InstanceLifecycle: aws.String(""),
@@ -2245,6 +1743,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 					},
 					"ondemand-running": {
 						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-running"),
 							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 							InstanceLifecycle: aws.String(""),
@@ -2255,6 +1754,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 			expected: []*instance{
 				{
 					Instance: &ec2.Instance{
+						InstanceId:        aws.String("spot-running1"),
 						State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 						Placement:         &ec2.Placement{AvailabilityZone: aws.String("1a")},
 						InstanceLifecycle: aws.String("spot"),
@@ -2262,6 +1762,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 				},
 				{
 					Instance: &ec2.Instance{
+						InstanceId:        aws.String("spot-running2"),
 						State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
 						Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
 						InstanceLifecycle: aws.String("spot"),
@@ -2270,7 +1771,7 @@ func TestGetAnySpotInstance(t *testing.T) {
 			},
 		},
 		{name: "ASG has no instance at all",
-			asgInstances: makeInstancesWithCatalog(map[string]*instance{}),
+			asgInstances: makeInstancesWithCatalog(instanceMap{}),
 			expected:     []*instance{},
 		},
 	}
@@ -2321,7 +1822,7 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 					DesiredCapacity: aws.Int64(2),
 				},
 				instances: makeInstancesWithCatalog(
-					map[string]*instance{
+					instanceMap{
 						"ondemand-stopped": {
 							Instance: &ec2.Instance{
 								InstanceId:        aws.String("ondemand-stopped"),
@@ -2336,8 +1837,10 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 										tierr: nil,
 									},
 									autoScaling: &mockASG{
-										aio:   nil,
-										aierr: nil,
+										aio:       nil,
+										aierr:     nil,
+										tiiasgo:   nil,
+										tiiasgerr: nil,
 									},
 								},
 							},
@@ -2354,6 +1857,12 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 									ec2: &mockEC2{
 										tio:   nil,
 										tierr: nil,
+										diao: &ec2.DescribeInstanceAttributeOutput{
+											DisableApiTermination: &ec2.AttributeBooleanValue{
+												Value: aws.Bool(true),
+											},
+										},
+										diaerr: nil,
 									},
 								},
 							},
@@ -2365,10 +1874,12 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 					conf: &Config{},
 					services: connections{
 						autoScaling: &mockASG{
-							uasgo:   nil,
-							uasgerr: nil,
-							dio:     nil,
-							dierr:   nil,
+							uasgo:     nil,
+							uasgerr:   nil,
+							dio:       nil,
+							dierr:     nil,
+							tiiasgo:   nil,
+							tiiasgerr: nil,
 						},
 						ec2: &mockEC2{
 							tio:   nil,
@@ -2376,7 +1887,7 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 						},
 					},
 					instances: makeInstancesWithCatalog(
-						map[string]*instance{
+						instanceMap{
 							"spot-running": {
 								Instance: &ec2.Instance{
 									InstanceId:        aws.String("spot-running"),
@@ -2389,6 +1900,12 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 										ec2: &mockEC2{
 											tio:   nil,
 											tierr: nil,
+											diao: &ec2.DescribeInstanceAttributeOutput{
+												DisableApiTermination: &ec2.AttributeBooleanValue{
+													Value: aws.Bool(true),
+												},
+											},
+											diaerr: nil,
 										},
 									},
 								},
@@ -2441,7 +1958,7 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 					DesiredCapacity: aws.Int64(2),
 				},
 				instances: makeInstancesWithCatalog(
-					map[string]*instance{
+					instanceMap{
 						"ondemand-running": {
 							Instance: &ec2.Instance{
 								InstanceId:        aws.String("ondemand-running"),
@@ -2454,6 +1971,12 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 									ec2: &mockEC2{
 										tio:   nil,
 										tierr: nil,
+										diao: &ec2.DescribeInstanceAttributeOutput{
+											DisableApiTermination: &ec2.AttributeBooleanValue{
+												Value: aws.Bool(true),
+											},
+										},
+										diaerr: nil,
 									},
 								},
 							},
@@ -2465,10 +1988,12 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 					conf: &Config{},
 					services: connections{
 						autoScaling: &mockASG{
-							uasgo:   nil,
-							uasgerr: nil,
-							dio:     nil,
-							dierr:   nil,
+							uasgo:     nil,
+							uasgerr:   nil,
+							dio:       nil,
+							dierr:     nil,
+							tiiasgo:   nil,
+							tiiasgerr: nil,
 						},
 						ec2: &mockEC2{
 							tio:   nil,
@@ -2476,7 +2001,7 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 						},
 					},
 					instances: makeInstancesWithCatalog(
-						map[string]*instance{
+						instanceMap{
 							"spot-running": {
 								Instance: &ec2.Instance{
 									InstanceId:        aws.String("spot-running"),
@@ -2513,14 +2038,16 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 					conf: &Config{},
 					services: connections{
 						autoScaling: &mockASG{
-							uasgo:   nil,
-							uasgerr: nil,
-							dio:     nil,
-							dierr:   nil,
+							uasgo:     nil,
+							uasgerr:   nil,
+							dio:       nil,
+							dierr:     nil,
+							tiiasgo:   nil,
+							tiiasgerr: nil,
 						},
 					},
 					instances: makeInstancesWithCatalog(
-						map[string]*instance{
+						instanceMap{
 							"spot-running": {
 								Instance: &ec2.Instance{
 									InstanceId:        aws.String("spot-running"),
@@ -2566,14 +2093,16 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 					conf: &Config{},
 					services: connections{
 						autoScaling: &mockASG{
-							uasgo:   nil,
-							uasgerr: nil,
-							dio:     nil,
-							dierr:   nil,
+							uasgo:     nil,
+							uasgerr:   nil,
+							dio:       nil,
+							dierr:     nil,
+							tiiasgo:   nil,
+							tiiasgerr: nil,
 						},
 					},
 					instances: makeInstancesWithCatalog(
-						map[string]*instance{
+						instanceMap{
 							"spot-running": {
 								Instance: &ec2.Instance{
 									InstanceId:        aws.String("spot-running"),
@@ -2602,6 +2131,11 @@ func TestReplaceOnDemandInstanceWithSpot(t *testing.T) {
 			returned := tt.asg.replaceOnDemandInstanceWithSpot(tt.spotID)
 			CheckErrors(t, returned, tt.expected)
 		})
+		t.Run(tt.name+"-detach-method", func(t *testing.T) {
+			tt.asg.config.TerminationMethod = "detach"
+			returned := tt.asg.replaceOnDemandInstanceWithSpot(tt.spotID)
+			CheckErrors(t, returned, tt.expected)
+		})
 	}
 }
 
@@ -2625,8 +2159,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2651,8 +2186,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "c2.xlarge",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "c2.xlarge",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2672,8 +2208,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "current",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "current",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2693,8 +2230,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "c2.xlarge",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "c2.xlarge",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2719,8 +2257,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "c4.xlarge",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "c4.xlarge",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2745,8 +2284,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "c2.xlarge,t2.medium,c3.small",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "c2.xlarge,t2.medium,c3.small",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2766,8 +2306,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "c2.xlarge t2.medium c3.small",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "c2.xlarge t2.medium c3.small",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2787,8 +2328,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: ",,c2.xlarge,,,t2.medium,c3.small,,",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: ",,c2.xlarge,,,t2.medium,c3.small,,",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2808,8 +2350,9 @@ func TestGetAllowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						AllowedInstanceTypes: "   c2.xlarge    t2.medium  c3.small  ",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							AllowedInstanceTypes: "   c2.xlarge    t2.medium  c3.small  ",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2853,8 +2396,9 @@ func TestGetDisallowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						DisallowedInstanceTypes: "",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							DisallowedInstanceTypes: "",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2879,8 +2423,9 @@ func TestGetDisallowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						DisallowedInstanceTypes: "c2.xlarge",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							DisallowedInstanceTypes: "c2.xlarge",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2900,8 +2445,9 @@ func TestGetDisallowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						DisallowedInstanceTypes: "c2.xlarge",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							DisallowedInstanceTypes: "c2.xlarge",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2926,8 +2472,9 @@ func TestGetDisallowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						DisallowedInstanceTypes: "c2.xlarge,t2.medium,c3.small",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							DisallowedInstanceTypes: "c2.xlarge,t2.medium,c3.small",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2947,8 +2494,9 @@ func TestGetDisallowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						DisallowedInstanceTypes: "c2.xlarge t2.medium c3.small",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							DisallowedInstanceTypes: "c2.xlarge t2.medium c3.small",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2968,8 +2516,9 @@ func TestGetDisallowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						DisallowedInstanceTypes: ",,c2.xlarge,,,t2.medium,c3.small,,",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							DisallowedInstanceTypes: ",,c2.xlarge,,,t2.medium,c3.small,,",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -2989,8 +2538,9 @@ func TestGetDisallowedInstanceTypes(t *testing.T) {
 				name: "TestASG",
 				region: &region{
 					conf: &Config{
-						DisallowedInstanceTypes: "   c2.xlarge    t2.medium  c3.small  ",
-					},
+						AutoScalingConfig: AutoScalingConfig{
+							DisallowedInstanceTypes: "   c2.xlarge    t2.medium  c3.small  ",
+						}},
 				},
 				Group: &autoscaling.Group{
 					DesiredCapacity: aws.Int64(4),
@@ -3079,7 +2629,7 @@ func Test_autoScalingGroup_findUnattachedInstanceLaunchedForThisASG(t *testing.T
 				name: "mygroup",
 				region: &region{
 					instances: makeInstancesWithCatalog(
-						map[string]*instance{
+						instanceMap{
 							"id-1": {
 								Instance: &ec2.Instance{
 									InstanceId: aws.String("id-1"),
@@ -3098,7 +2648,7 @@ func Test_autoScalingGroup_findUnattachedInstanceLaunchedForThisASG(t *testing.T
 				name: "mygroup",
 				region: &region{
 					instances: makeInstancesWithCatalog(
-						map[string]*instance{
+						instanceMap{
 							"id-1": {
 								Instance: &ec2.Instance{
 									InstanceId: aws.String("id-1"),
@@ -3139,7 +2689,7 @@ func Test_autoScalingGroup_findUnattachedInstanceLaunchedForThisASG(t *testing.T
 
 				region: &region{
 					instances: makeInstancesWithCatalog(
-						map[string]*instance{
+						instanceMap{
 							"id-1": {
 								Instance: &ec2.Instance{
 									InstanceId: aws.String("id-1"),
@@ -3188,6 +2738,582 @@ func Test_autoScalingGroup_findUnattachedInstanceLaunchedForThisASG(t *testing.T
 
 			if got := a.findUnattachedInstanceLaunchedForThisASG(); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("autoScalingGroup.findUnattachedInstanceLaunchedForThisASG() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_autoScalingGroup_getAnyUnprotectedOnDemandInstance(t *testing.T) {
+	tests := []struct {
+		name         string
+		asgInstances instances
+
+		want *instance
+	}{
+		{
+			name: "ASG has unprotected and protected from scale-in instance",
+			asgInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-unprotected": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-unprotected"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+							InstanceLifecycle: aws.String(""),
+						},
+						asg: &autoScalingGroup{
+							Group: &autoscaling.Group{
+								Instances: []*autoscaling.Instance{
+									{
+										InstanceId:           aws.String("ondemand-unprotected"),
+										ProtectedFromScaleIn: aws.Bool(false),
+									},
+								},
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										// not protected from termination
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
+						},
+					},
+					"ondemand-protected-scalein": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-protected-scalein"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String(""),
+						},
+						asg: &autoScalingGroup{
+							Group: &autoscaling.Group{
+								Instances: []*autoscaling.Instance{
+									{
+										InstanceId:           aws.String("ondemand-protected-scalein"),
+										ProtectedFromScaleIn: aws.Bool(true),
+										AvailabilityZone:     aws.String("1b"),
+									},
+								},
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										// not protected from termination
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			),
+			want: &instance{
+				Instance: &ec2.Instance{
+					InstanceId:        aws.String("ondemand-unprotected"),
+					State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+					Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+					InstanceLifecycle: aws.String(""),
+				},
+				asg: &autoScalingGroup{
+					Group: &autoscaling.Group{
+						Instances: []*autoscaling.Instance{
+							{
+								InstanceId:           aws.String("ondemand-unprotected"),
+								ProtectedFromScaleIn: aws.Bool(false),
+							},
+						},
+					},
+				},
+				region: &region{
+					services: connections{
+						ec2: mockEC2{
+							diao: &ec2.DescribeInstanceAttributeOutput{
+								// not protected from termination
+								DisableApiTermination: &ec2.AttributeBooleanValue{
+									Value: aws.Bool(false),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		{
+			name: "ASG has unprotected and protected from termination instance",
+			asgInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-unprotected": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-unprotected"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+							InstanceLifecycle: aws.String(""),
+						},
+						asg: &autoScalingGroup{
+							Group: &autoscaling.Group{
+								Instances: []*autoscaling.Instance{
+									{
+										InstanceId:           aws.String("ondemand-unprotected"),
+										ProtectedFromScaleIn: aws.Bool(false),
+									},
+								},
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										// not protected from termination
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
+						},
+					},
+					"ondemand-protected-termination": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-protected-termination"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String(""),
+						},
+						asg: &autoScalingGroup{
+							Group: &autoscaling.Group{
+								Instances: []*autoscaling.Instance{
+									{
+										InstanceId:           aws.String("ondemand-protected-termination"),
+										ProtectedFromScaleIn: aws.Bool(false),
+									},
+								},
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										// not protected from termination
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			),
+			want: &instance{
+				Instance: &ec2.Instance{
+					InstanceId:        aws.String("ondemand-unprotected"),
+					State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+					Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+					InstanceLifecycle: aws.String(""),
+				},
+				asg: &autoScalingGroup{
+					Group: &autoscaling.Group{
+						Instances: []*autoscaling.Instance{
+							{
+								InstanceId:           aws.String("ondemand-unprotected"),
+								ProtectedFromScaleIn: aws.Bool(false),
+							},
+						},
+					},
+				},
+				region: &region{
+					services: connections{
+						ec2: mockEC2{
+							diao: &ec2.DescribeInstanceAttributeOutput{
+								// not protected from termination
+								DisableApiTermination: &ec2.AttributeBooleanValue{
+									Value: aws.Bool(false),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "ASG has no unprotected instances in AZ",
+			asgInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-protected-scale-in": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-protected-scale-in"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1c")},
+							InstanceLifecycle: aws.String(""),
+						},
+						asg: &autoScalingGroup{
+							Group: &autoscaling.Group{
+								Instances: []*autoscaling.Instance{
+									{
+										InstanceId:           aws.String("ondemand-protected-scale-in"),
+										ProtectedFromScaleIn: aws.Bool(true),
+										AvailabilityZone:     aws.String("1c"),
+									},
+								},
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(false),
+										},
+									},
+								},
+							},
+						},
+					},
+					"ondemand-protected-termination": {
+						Instance: &ec2.Instance{
+							InstanceId:        aws.String("ondemand-protected-termination"),
+							State:             &ec2.InstanceState{Name: aws.String(ec2.InstanceStateNameRunning)},
+							Placement:         &ec2.Placement{AvailabilityZone: aws.String("1b")},
+							InstanceLifecycle: aws.String(""),
+						},
+						asg: &autoScalingGroup{
+							Group: &autoscaling.Group{
+								Instances: []*autoscaling.Instance{
+									{
+										InstanceId:           aws.String("ondemand-protected-termination"),
+										ProtectedFromScaleIn: aws.Bool(false),
+									},
+								},
+							},
+						},
+						region: &region{
+							services: connections{
+								ec2: mockEC2{
+									diao: &ec2.DescribeInstanceAttributeOutput{
+										DisableApiTermination: &ec2.AttributeBooleanValue{
+											Value: aws.Bool(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			),
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &autoScalingGroup{
+				name:      tt.name,
+				instances: tt.asgInstances,
+			}
+			if got := a.getAnyUnprotectedOnDemandInstance(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("autoScalingGroup.getAnyUnprotectedOnDemandInstance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_autoScalingGroup_licensedToRun(t *testing.T) {
+
+	tests := []struct {
+		name    string
+		asg     autoScalingGroup
+		want    bool
+		wantErr bool
+	}{
+		{
+			name: "On-demand-only",
+			asg: autoScalingGroup{
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"ondemand-1": {
+							price: 1.0,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+						"ondemand-2": {
+							price: 1.0,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+
+		{
+			name: "spot-less-than-1000-monthly",
+			asg: autoScalingGroup{
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.9,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.9,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 1.0,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+
+		{
+			name: "spot-more-than-1000-monthly-evaluation",
+			asg: autoScalingGroup{
+				region: &region{
+					conf: &Config{
+						LicenseType: "evaluation",
+						Version:     "nightly",
+					},
+				},
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+					}),
+			},
+			want:    false,
+			wantErr: true,
+		},
+
+		{
+			name: "spot-more-than-1000-monthly-custom",
+			asg: autoScalingGroup{
+				region: &region{
+					conf: &Config{
+						LicenseType: "evaluation",
+						Version:     "custom",
+					},
+				},
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+
+		{
+			name: "spot-more-than-1000-monthly-patron",
+			asg: autoScalingGroup{
+				region: &region{
+					conf: &Config{
+						LicenseType: "I_am_supporting_it_on_Patreon",
+						Version:     "nightly",
+					},
+				},
+				instances: makeInstancesWithCatalog(
+					instanceMap{
+						"spot-1": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+						"spot-2": {
+							price: 0.1,
+							typeInfo: instanceTypeInformation{
+								pricing: prices{
+									onDemand: 10.1,
+								},
+							},
+						},
+					}),
+			},
+			want:    true,
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := tt.asg
+
+			got, err := a.licensedToRun()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("autoScalingGroup.licensedToRun() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("autoScalingGroup.licensedToRun() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_autoScalingGroup_calculateHourlySavings(t *testing.T) {
+	tests := []struct {
+		name      string
+		instances instances
+		want      float64
+	}{
+		{
+			name: "On-demand-only",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-1": {
+						price: 1.0,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+					"ondemand-2": {
+						price: 1.0,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+				}),
+			want: 0,
+		},
+
+		{
+			name: "spot-only",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"spot-1": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+					"spot-2": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+				}),
+			want: 1.8,
+		},
+
+		{
+			name: "spot-and-on-demand",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-1": {
+						price: 1.0,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+					"spot-1": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+							},
+						},
+					},
+				}),
+			want: 0.9,
+		},
+		{
+			name: "premium-instance",
+			instances: makeInstancesWithCatalog(
+				instanceMap{
+					"ondemand-1": {
+						price: 1.6,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+								premium:  0.6,
+							},
+						},
+					},
+					"spot-1": {
+						price: 0.1,
+						typeInfo: instanceTypeInformation{
+							pricing: prices{
+								onDemand: 1.0,
+								premium:  0.6,
+							},
+						},
+					},
+				}),
+			want: 1.5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &autoScalingGroup{
+				instances: tt.instances,
+			}
+			if got := a.calculateHourlySavings(); got != tt.want {
+				t.Errorf("autoScalingGroup.calculateHourlySavings() = %v, want %v", got, tt.want)
 			}
 		})
 	}

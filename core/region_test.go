@@ -1,3 +1,6 @@
+// Copyright (c) 2016-2019 Cristian Măgherușan-Stanciu
+// Licensed under the Open Software License version 3.0
+
 package autospotting
 
 import (
@@ -7,8 +10,10 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
+	"github.com/aws/aws-sdk-go/service/cloudformation"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/blueharvest/ec2-instances-info"
+	ec2instancesinfo "github.com/jjones-smug/ec2-instances-info"
+	"github.com/davecgh/go-spew/spew"
 )
 
 func Test_region_enabled(t *testing.T) {
@@ -183,17 +188,20 @@ func TestOnDemandPriceMultiplier(t *testing.T) {
 					},
 				},
 			},
-			OnDemandPriceMultiplier: tt.multiplier,
+			AutoScalingConfig: AutoScalingConfig{
+				OnDemandPriceMultiplier: tt.multiplier,
+			},
 		}
 		r := region{
 			name: "us-east-1",
 			conf: cfg,
 			services: connections{
 				ec2: mockEC2{
-					dspho: &ec2.DescribeSpotPriceHistoryOutput{
-						SpotPriceHistory: []*ec2.SpotPrice{},
+					dsphpo: []*ec2.DescribeSpotPriceHistoryOutput{
+						{
+							SpotPriceHistory: []*ec2.SpotPrice{},
+						},
 					},
-					dspherr: nil,
 				},
 			}}
 		r.determineInstanceTypeInformation(cfg)
@@ -255,6 +263,11 @@ func TestDefaultASGFiltering(t *testing.T) {
 }
 
 func TestFilterAsgs(t *testing.T) {
+	// Test invalid regular expression
+	var nullSlice []string
+	stackName := "dummyStackName"
+	stackStatus := "UPDATE_COMPLETE"
+
 	tests := []struct {
 		name    string
 		want    []string
@@ -494,10 +507,135 @@ func TestFilterAsgs(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Test with multiple secondary filters with glob expression",
+			tregion: &region{
+				tagsToFilterASGsBy: []Tag{
+					{Key: "spot-enabled", Value: "true"},
+					{Key: "environment", Value: "sandbox*"},
+					{Key: "team", Value: "interactive"},
+				},
+				conf: &Config{},
+				services: connections{
+					autoScaling: mockASG{
+						dasgo: &autoscaling.DescribeAutoScalingGroupsOutput{
+							AutoScalingGroups: []*autoscaling.Group{
+								{
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("environment"), Value: aws.String("customer1-dev"), ResourceId: aws.String("asg1")},
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg1")},
+									},
+									AutoScalingGroupName: aws.String("asg1"),
+								},
+								{
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("environment"), Value: aws.String("sandbox-dev"), ResourceId: aws.String("asg2")},
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg2")},
+										{Key: aws.String("team"), Value: aws.String("interactive"), ResourceId: aws.String("asg2")},
+									},
+									AutoScalingGroupName: aws.String("asg2"),
+								},
+								{
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("environment"), Value: aws.String("qa"), ResourceId: aws.String("asg3")},
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg3")},
+									},
+									AutoScalingGroupName: aws.String("asg3"),
+								},
+								{
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("environment"), Value: aws.String("sandbox-qa"), ResourceId: aws.String("asg4")},
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg4")},
+										{Key: aws.String("team"), Value: aws.String("interactive"), ResourceId: aws.String("asg4")},
+									},
+									AutoScalingGroupName: aws.String("asg4"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"asg2", "asg4"},
+		},
+		{
+			name: "Test filters with invalid glob expression",
+			tregion: &region{
+				tagsToFilterASGsBy: []Tag{
+					{Key: "spot-enabled", Value: "true"},
+					{Key: "environment", Value: "($"},
+					{Key: "team", Value: "interactive"},
+				},
+				conf: &Config{},
+				services: connections{
+					autoScaling: mockASG{
+						dasgo: &autoscaling.DescribeAutoScalingGroupsOutput{
+							AutoScalingGroups: []*autoscaling.Group{
+								{
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("environment"), Value: aws.String("customer1-dev"), ResourceId: aws.String("asg1")},
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg1")},
+									},
+									AutoScalingGroupName: aws.String("asg1"),
+								},
+								{
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg2")},
+										{Key: aws.String("team"), Value: aws.String("interactive"), ResourceId: aws.String("asg2")},
+									},
+									AutoScalingGroupName: aws.String("asg2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: nullSlice,
+		},
+		{
+			name: "Test skipping execution against mixed groups",
+			want: []string{"asg1"},
+			tregion: &region{
+				tagsToFilterASGsBy: []Tag{{Key: "spot-enabled", Value: "true"}},
+				conf:               &Config{},
+				services: connections{
+					autoScaling: mockASG{
+						dasgo: &autoscaling.DescribeAutoScalingGroupsOutput{
+							AutoScalingGroups: []*autoscaling.Group{
+								{
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("environment"), Value: aws.String("dev"), ResourceId: aws.String("asg1")},
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg1")},
+									},
+									AutoScalingGroupName: aws.String("asg1"),
+								},
+								{
+									MixedInstancesPolicy: &autoscaling.MixedInstancesPolicy{},
+									Tags: []*autoscaling.TagDescription{
+										{Key: aws.String("environment"), Value: aws.String("dev"), ResourceId: aws.String("asg2")},
+										{Key: aws.String("spot-enabled"), Value: aws.String("true"), ResourceId: aws.String("asg2")},
+									},
+									AutoScalingGroupName: aws.String("asg2"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.tregion
+			r.services.cloudFormation = mockCloudFormation{
+				dso: &cloudformation.DescribeStacksOutput{
+					Stacks: []*cloudformation.Stack{
+						{
+							StackName:   &stackName,
+							StackStatus: &stackStatus,
+						},
+					},
+				},
+			}
 			r.scanForEnabledAutoScalingGroups()
 			var asgNames []string
 			for _, name := range r.enabledASGs {
@@ -505,6 +643,203 @@ func TestFilterAsgs(t *testing.T) {
 			}
 			if !reflect.DeepEqual(tt.want, asgNames) {
 				t.Errorf("region.scanForEnabledAutoScalingGroups() = %v, want %v", asgNames, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsStackUpdating(t *testing.T) {
+	stackName := "dummyStackName"
+
+	tests := []struct {
+		name   string
+		region *region
+		want   bool
+	}{
+		{
+			name: "Stack is not updating",
+			region: &region{
+				services: connections{
+					cloudFormation: mockCloudFormation{
+						dso: &cloudformation.DescribeStacksOutput{
+							Stacks: []*cloudformation.Stack{
+								{
+									StackName:   &stackName,
+									StackStatus: aws.String("UPDATE_COMPLETE"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "Stack is updating",
+			region: &region{
+				services: connections{
+					cloudFormation: mockCloudFormation{
+						dso: &cloudformation.DescribeStacksOutput{
+							Stacks: []*cloudformation.Stack{
+								{
+									StackName:   &stackName,
+									StackStatus: aws.String("UPDATE_IN_PROGRESS"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, got := tt.region.isStackUpdating(&stackName); got != tt.want {
+				t.Errorf("Error in isStackUpdating: expected %v actual %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func Test_region_scanInstances(t *testing.T) {
+
+	tests := []struct {
+		name          string
+		regionInfo    *region
+		wantErr       bool
+		wantInstances instances
+	}{
+		{
+			name: "region with a single instance",
+			regionInfo: &region{
+				name: "us-east-1",
+				conf: &Config{
+					AutoScalingConfig: AutoScalingConfig{
+						MinOnDemandNumber: 2,
+					},
+				},
+				services: connections{
+					ec2: mockEC2{
+						diperr: nil,
+						dio: &ec2.DescribeInstancesOutput{
+							Reservations: []*ec2.Reservation{
+								{
+									Instances: []*ec2.Instance{
+										{
+											InstanceId:   aws.String("id-1"),
+											InstanceType: aws.String("typeX"),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+			wantInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							InstanceId:   aws.String("id-1"),
+							InstanceType: aws.String("typeX"),
+						},
+					},
+				},
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := tt.regionInfo
+			err := r.scanInstances()
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("region.scanInstances() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			for inst := range r.instances.instances() {
+				wantedInstance := tt.wantInstances.get(*inst.InstanceId).Instance
+
+				if !reflect.DeepEqual(inst.Instance, wantedInstance) {
+					t.Errorf("region.scanInstances() \nreceived instance data: \n %+v\nexpected: \n %+v",
+						spew.Sdump(inst.Instance), spew.Sdump(wantedInstance))
+
+				}
+			}
+
+		})
+	}
+}
+
+func Test_region_processDescribeInstancesPage(t *testing.T) {
+	type regionFields struct {
+		name      string
+		instances instances
+	}
+	type args struct {
+		page     *ec2.DescribeInstancesOutput
+		lastPage bool
+	}
+	tests := []struct {
+		name          string
+		regionFields  regionFields
+		args          args
+		want          bool
+		wantInstances instances
+	}{
+		{
+			name: "region with a single instance",
+			regionFields: regionFields{
+				name:      "us-east-1",
+				instances: makeInstancesWithCatalog(instanceMap{}),
+			},
+			args: args{
+				page: &ec2.DescribeInstancesOutput{
+					Reservations: []*ec2.Reservation{
+						{
+							Instances: []*ec2.Instance{{
+								InstanceId:   aws.String("id-1"),
+								InstanceType: aws.String("typeX"),
+							},
+								{
+									InstanceId:   aws.String("id-2"),
+									InstanceType: aws.String("typeY"),
+								},
+							},
+						},
+					},
+				},
+				lastPage: true,
+			},
+			want: true,
+			wantInstances: makeInstancesWithCatalog(
+				instanceMap{
+					"id-1": {
+						Instance: &ec2.Instance{
+							InstanceId:   aws.String("id-1"),
+							InstanceType: aws.String("typeX"),
+						},
+					},
+					"id-2": {
+						Instance: &ec2.Instance{
+							InstanceId:   aws.String("id-2"),
+							InstanceType: aws.String("typeY"),
+						},
+					},
+				},
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &region{
+				name:      tt.regionFields.name,
+				instances: tt.regionFields.instances,
+			}
+			if got := r.processDescribeInstancesPage(tt.args.page, tt.args.lastPage); got != tt.want {
+				t.Errorf("region.processDescribeInstancesPage() = %v, want %v", got, tt.want)
 			}
 		})
 	}
