@@ -158,8 +158,8 @@ func (i *instance) isProtectedFromTermination() (bool, error) {
 
 	if err != nil {
 		// better safe than sorry!
-		logger.Printf("Couldn't describe instance attributes, assuming instance %v is protected: %v\n",
-			*i.InstanceId, err.Error())
+		logger.Printf("Couldn't describe instance attributes, assuming instance %v (type %v) is protected: %v\n",
+			*i.InstanceId, *.InstanceType., err.Error())
 		return true, err
 	}
 
