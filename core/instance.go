@@ -158,8 +158,8 @@ func (i *instance) isProtectedFromTermination() (bool, error) {
 
 	if err != nil {
 		// better safe than sorry!
-		logger.Printf("Couldn't describe instance attributes, assuming instance %v (type %v) is protected: %v\n",
-			*i.InstanceId, *.InstanceType., err.Error())
+		logger.Printf("Couldn't describe instance attributes, assuming instance %v is protected: %v\n",
+			*i.InstanceId, err.Error())
 		return true, err
 	}
 
@@ -343,7 +343,7 @@ func (i *instance) isAllowed(instanceType string, allowedList []string, disallow
 				return true
 			}
 		}
-		logger.Println("\tNot in the list of allowed instance types")
+		// logger.Println("\tNot in the list of allowed instance types")
 		return false
 	} else if len(disallowedList) > 0 {
 		for _, a := range disallowedList {
