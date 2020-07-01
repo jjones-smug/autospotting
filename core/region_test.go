@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/cloudformation"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/davecgh/go-spew/spew"
-	ec2instancesinfo "github.com/jjones-smug/ec2-instances-info"
+	ec2instancesinfo "github.com/blueharvest/ec2-instances-info"
 )
 
 func Test_region_enabled(t *testing.T) {
